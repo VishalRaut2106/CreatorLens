@@ -1,7 +1,7 @@
 import sqlite3
 import os
 
-DB_PATH = "influencefit.db"
+DB_PATH = "creatorlens.db"
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH)

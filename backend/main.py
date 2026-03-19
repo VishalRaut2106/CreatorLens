@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes.campaign import router as campaign_router
 from db.database import init_db
 
-app = FastAPI(title="InfluenceFit API", version="0.1.0")
+app = FastAPI(title="CreatorLens API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,4 +23,4 @@ async def startup():
 
 @app.get("/")
 def root():
-    return {"status": "InfluenceFit API running"}
+    return {"status": "CreatorLens API running"}

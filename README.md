@@ -1,4 +1,4 @@
-# InfluenceFit — System Architecture
+# CreatorLens — System Architecture
 
 > Find the Right Influencer. Verify Them. Know What to Pay.
 
@@ -6,7 +6,7 @@
 
 ## Overview
 
-InfluenceFit runs one core loop:
+CreatorLens runs one core loop:
 
 **Brand brief → Parallel TinyFish agents → LLM scoring → Ranked dossier**
 
