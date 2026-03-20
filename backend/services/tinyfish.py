@@ -4,13 +4,13 @@ import os
 import asyncio
 from typing import List
 
-TINYFISH_API_KEY = os.getenv("TINYFISH_API_KEY")
 TINYFISH_URL = "https://agent.tinyfish.ai/v1/automation/run-sse"
 
-HEADERS = {
-    "X-API-Key": TINYFISH_API_KEY,
-    "Content-Type": "application/json"
-}
+def _get_headers():
+    return {
+        "X-API-Key": os.getenv("TINYFISH_API_KEY"),
+        "Content-Type": "application/json"
+    }
 
 
 # -----------------------------------------------------------
@@ -27,15 +27,21 @@ async def run_agent(url: str, goal: str, stealth: bool = False) -> dict:
         "browser_profile": "stealth" if stealth else "lite"
     }
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        async with client.stream("POST", TINYFISH_URL, headers=HEADERS, json=payload) as resp:
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream("POST", TINYFISH_URL, headers=_get_headers(), json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
                     continue
                 event = json.loads(line[6:])
                 if event.get("type") == "COMPLETE":
-                    return event.get("result", {})
+                    result = event.get("result", {})
+                    if isinstance(result, str):
+                        try:
+                            result = json.loads(result)
+                        except Exception:
+                            result = {}
+                    return result if isinstance(result, dict) else {"data": result}
 
     return {}
 
@@ -77,7 +83,9 @@ async def discover_influencers(keywords: List[str], platforms: List[str]) -> Lis
     profiles = []
     for result in results:
         if isinstance(result, Exception):
+            print(f"  [DISCOVERY] Agent exception: {result}")
             continue
+        print(f"  [DISCOVERY] Raw result: {result}")
         keys = list(result.keys()); items = result.get(keys[0], []) if keys else []
         for item in items:
             key = (item.get("handle", "").lower(), item.get("platform", ""))
@@ -165,4 +173,4 @@ async def run_full_audit(profiles: List[dict]) -> List[dict]:
         }
         enriched.append(merged)
 
-    return enriched
+    return enriched

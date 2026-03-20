@@ -1,0 +1,24 @@
+﻿============================================================
+CreatorLens Pipeline Diagnostic
+============================================================
+
+[TEST] Environment variables...
+  TINYFISH_API_KEY: Γ£ô set
+  OLLAMA_BASE_URL: http://localhost:11434
+  OLLAMA_MODEL: llama3.2
+
+[TEST] Ollama connectivity...
+  Γ£ô Ollama responded: Hello.
+
+[TEST] TinyFish API connectivity...
+  Key loaded: sk-tinyfish-Z88bAH8l...
+  Γ£ô TinyFish responded: {'title': 'Google'}
+
+[TEST] Keyword expansion...
+  Γ£ô Keywords: ['fitness influencers', "men's fitness", 'gym rats', 'bodybuilding', 'workout motivation', 'male fitness inspiration']
+
+============================================================
+Summary:
+  Ollama:   Γ£ô PASS
+  TinyFish: Γ£ô PASS
+============================================================
