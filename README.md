@@ -1,207 +1,195 @@
-# CreatorLens — System Architecture
+# CreatorLens
 
 > Find the Right Influencer. Verify Them. Know What to Pay.
 
+An influencer marketing intelligence platform that automates the entire pre-campaign workflow — discovery, qualification, brand safety audit, and pricing — using parallel TinyFish browser agents and local LLM scoring.
+
+Built for the **TinyFish × HackerEarth $2M Pre-Accelerator Hackathon 2026**.
+
 ---
 
-## Overview
-
-CreatorLens runs one core loop:
+## How It Works
 
 **Brand brief → Parallel TinyFish agents → LLM scoring → Ranked dossier**
 
-Everything else is UI and storage around that loop.
+1. Submit a brand brief (niche, audience, budget, platforms)
+2. Ollama expands it into search keywords
+3. TinyFish fires 100+ parallel browser agents across Instagram, TikTok, YouTube
+4. Agents discover profiles, pull engagement stats, audit brand safety, and benchmark pricing — all simultaneously
+5. Ollama scores and ranks candidates into a top-10 dossier
+6. Results stored and returned via polling endpoint
+
+Total runtime: under 2 minutes for 20 candidates.
 
 ---
 
-## Stack at a Glance
+## Stack
 
-| Layer | Technology | Role |
+| Layer | Technology |
+|---|---|
+| Frontend | React + Vite (coming soon) |
+| Backend | FastAPI (Python) |
+| Agent infra | TinyFish API |
+| LLM scoring | Ollama (llama3.2, local) |
+| Storage | SQLite → Postgres |
+
+---
+
+## Project Structure
+
+```
+CreatorLens/
+├── backend/
+│   ├── main.py              # FastAPI entry point
+│   ├── .env                 # API keys and config
+│   ├── routes/
+│   │   └── campaign.py      # POST /api/run-campaign, GET /api/status/{job_id}
+│   ├── services/
+│   │   ├── tinyfish.py      # Parallel browser agent calls
+│   │   └── scoring.py       # Ollama keyword expansion + scoring
+│   ├── models/
+│   │   └── schemas.py       # Pydantic models
+│   └── db/
+│       └── database.py      # SQLite CRUD
+├── test_tinyfish.py          # Standalone TinyFish API test
+└── CLAUDE_CONTEXT.md         # AI assistant session context
+```
+
+---
+
+## Setup
+
+### Prerequisites
+- Python 3.11+
+- [Ollama](https://ollama.ai) installed and running
+- TinyFish API key from [tinyfish.ai](https://tinyfish.ai)
+
+### 1. Clone and install
+
+```powershell
+cd backend
+python -m venv venv
+venv\Scripts\activate
+pip install fastapi uvicorn python-dotenv httpx
+```
+
+### 2. Configure environment
+
+Create `backend/.env`:
+
+```
+TINYFISH_API_KEY=sk-tinyfish-your-key-here
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2
+```
+
+### 3. Pull the model
+
+```powershell
+ollama pull llama3.2
+```
+
+### 4. Run the server
+
+```powershell
+cd backend
+uvicorn main:app --reload --port 8000
+```
+
+API docs available at `http://localhost:8000/docs`
+
+---
+
+## API
+
+### POST `/api/run-campaign`
+
+Submit a brand brief and get a `job_id` back immediately. The pipeline runs in the background.
+
+```json
+{
+  "niche": "fitness supplements",
+  "target_audience": "men 18-35 India",
+  "budget_min": 500,
+  "budget_max": 5000,
+  "platforms": ["instagram", "youtube"],
+  "keywords": ["protein shake", "gym workout", "bodybuilding"]
+}
+```
+
+Response:
+```json
+{
+  "job_id": "b7f239c6-...",
+  "status": "pending",
+  "results": null
+}
+```
+
+### GET `/api/status/{job_id}`
+
+Poll this every few seconds. Status flows: `pending → running → complete | failed`
+
+```json
+{
+  "job_id": "b7f239c6-...",
+  "status": "complete",
+  "results": [
+    {
+      "handle": "cbum",
+      "platform": "instagram",
+      "followers": 26000000,
+      "engagement_rate": 0.58,
+      "risk_flag": "green",
+      "price_low": 50000,
+      "price_high": 150000,
+      "composite_score": 87.4,
+      "ai_summary": "Chris Bumstead is a dominant figure in the fitness supplement niche..."
+    }
+  ]
+}
+```
+
+---
+
+## Agent Pipeline
+
+Four agent types run in parallel via `asyncio.gather`:
+
+| Agent | Task | Sources |
 |---|---|---|
-| Frontend | React (Vite) | Brand brief input + results dashboard |
-| Backend | FastAPI (Python) | Orchestration, job management |
-| Agent infra | TinyFish API | 100+ parallel browser agents |
-| LLM scoring | Anthropic Claude API | Ranking, summarization |
-| Storage | SQLite → Postgres | Results cache, job state |
+| Discovery | Find matching profiles by keyword | Instagram, TikTok, YouTube |
+| Qualification | Pull engagement stats per profile | Platform profile pages |
+| Audit | Brand safety check | Google, Reddit, Twitter/X |
+| Pricing | Rate benchmarks | Collabstr |
 
 ---
 
-## Layer 1 — Frontend (React)
-
-Two screens only.
-
-**Screen 1 — Brief form**
-- Niche / keywords
-- Target audience description
-- Budget range
-- Platform preference (Instagram / TikTok / YouTube)
-
-**Screen 2 — Results dashboard**
-- Ranked shortlist of 10 influencers
-- Per-influencer dossier card: score, engagement stats, risk flag, pricing estimate, AI summary
-- Loading/polling state while agents run (expect 1–2 min)
-
----
-
-## Layer 2 — FastAPI Backend
-
-The orchestration brain. Two core endpoints:
-
-```
-POST /run-campaign       → accepts brand brief, spawns TinyFish jobs, returns job_id
-GET  /status/{job_id}    → frontend polls this until status = "complete"
-```
-
-**Job lifecycle:**
-1. Receive brand brief
-2. Generate search keywords from brief (Claude call #1)
-3. Dispatch all TinyFish agent batches in parallel
-4. Poll / receive webhooks until all agents complete
-5. Pass raw data to Claude scoring layer (Claude call #2)
-6. Store results, return final dossier
-
----
-
-## Layer 3 — TinyFish Agents (Core Value)
-
-Four agent types run **simultaneously** — not sequentially.
-
-### Discovery agents
-- Platforms: Instagram, TikTok, YouTube
-- Task: search niche keywords, return matching profile URLs
-- Scale: 3–4 agents per platform in parallel
-
-### Qualification agents
-- For each discovered profile
-- Pull: follower count, post frequency, avg likes, avg comments, engagement rate
-- Filters out vanity accounts before audit stage
-
-### Audit agents
-- Search each influencer's name + "controversy / scandal / drama"
-- Sources: news sites, Twitter/X, Reddit
-- Returns: risk flag (green / amber / red) + evidence links
-
-### Pricing agents
-- Sources: Collabstr + niche-specific rate sites
-- Match by: follower tier + niche category
-- Output: estimated rate range (post, story, reel)
-
-> **Key architecture decision:** all four agent types launch in a single TinyFish batch call. Discovery finishes first, qualification + audit + pricing fire immediately after using discovery output as input.
-
----
-
-## Layer 4 — LLM Scoring (Claude)
-
-Two Claude calls in the pipeline:
-
-**Call #1 — Keyword expansion** (before agents run)
-- Input: raw brand brief
-- Output: structured search terms per platform
-
-**Call #2 — Scoring + summarization** (after agents return)
-- Input: raw agent data for all candidates
-- Output per influencer:
-  - Composite score (0–100)
-  - Breakdown: engagement quality, brand fit, risk, price fairness
-  - 2–3 sentence natural-language summary for the dossier card
-
-**Scoring weights (recommended starting point):**
+## Scoring Weights
 
 | Signal | Weight |
 |---|---|
-| Engagement rate (real vs inflated) | 35% |
-| Brand fit (content alignment) | 30% |
-| Risk score (audit result) | 25% |
+| Engagement quality | 35% |
+| Brand fit | 30% |
+| Risk score (100 = safe) | 25% |
 | Price fairness | 10% |
 
 ---
 
-## Layer 5 — Storage
+## Testing TinyFish
 
-**SQLite** for hackathon speed. **Postgres** for production.
+Run the standalone test script from `backend/`:
 
-Two tables:
-
-```sql
-jobs (job_id, status, brand_brief, created_at, completed_at)
-
-influencer_results (
-  id, job_id, handle, platform,
-  followers, engagement_rate,
-  risk_flag, risk_evidence,
-  price_low, price_high,
-  composite_score, ai_summary,
-  fetched_at
-)
+```powershell
+python test_tinyfish.py
 ```
 
-Cache by `(handle, platform)` — repeated audits of the same influencer skip the agent re-run if data is less than 24 hours old.
-
----
-
-## Data Flow
-
-```
-User submits brief
-        │
-        ▼
-FastAPI → Claude (keyword expansion)
-        │
-        ▼
-TinyFish batch dispatch ──────────────────────────┐
-        │                                          │
-   Discovery agents                                │
-   (Instagram / TikTok / YouTube)                  │
-        │                                          │
-        ▼                                          │
-   Profile URLs (20–50 candidates)                 │
-        │                                          │
-   ┌────┴──────────────────────────┐               │
-   │                               │               │
-Qualification agents          Audit agents         │
-(engagement stats)         (brand safety check)    │
-   │                               │               │
-   └────────────┬──────────────────┘               │
-                │                                  │
-           Pricing agents                          │
-           (rate benchmarks)                       │
-                │                                  │
-                ▼                                  │
-        Raw data bundle ◄─────────────────────────┘
-                │
-                ▼
-        Claude scoring layer
-        (rank + summarize)
-                │
-                ▼
-        Store in DB
-                │
-                ▼
-        Dashboard output
-        (top 10 ranked dossiers)
-```
-
----
-
-## Key Architecture Decisions
-
-**Polling vs webhooks**
-- Hackathon: poll `GET /status/{job_id}` every 3s from frontend — simple, no infra needed
-- Production: TinyFish webhook → FastAPI callback → push update via WebSocket
-
-**Parallelism strategy**
-- Don't run discovery → qualification → audit → pricing in sequence
-- Discovery feeds directly into a second parallel batch (qual + audit + pricing fire together)
-- Total expected runtime: under 2 minutes for 20 candidates
-
-**Caching**
-- Cache influencer results by handle + platform with 24h TTL
-- Saves agent cost on repeat queries for the same influencer
+This fires a single agent at Instagram and prints all SSE events live.
 
 ---
 
 ## What Makes This Defensible
 
-This product is not technically possible without parallel browser agents. The audit step alone — cross-referencing an influencer's name across news, Reddit, and Twitter simultaneously — would take 45+ minutes sequentially. TinyFish runs it across all 20 candidates in under 2 minutes.
+Manually vetting 20 influencers across 6 platforms takes 3 days of human labor. CreatorLens does it in under 2 minutes by running all agents simultaneously. The audit step alone — cross-referencing each influencer across news, Reddit, and Twitter — is impossible at this speed without parallel browser agents.
 
-That's the demo moment. That's the moat.
+That's the moat.
