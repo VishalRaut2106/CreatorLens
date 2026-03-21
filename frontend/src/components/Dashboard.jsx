@@ -127,7 +127,7 @@ export default function Dashboard({ jobId, onComplete, onReset, loading, results
 
     const messages = [
       "Expanding keywords with Ollama...",
-      "Firing discovery agents across Instagram, TikTok, YouTube...",
+      "Firing discovery agents across Instagram, Twitter, YouTube...",
       "Running parallel audit agents — engagement, brand safety, pricing...",
       "Scoring and ranking candidates with LLM...",
       "Saving results to database...",

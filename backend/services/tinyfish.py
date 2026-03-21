@@ -57,7 +57,7 @@ async def run_agent(url: str, goal: str, stealth: bool = False) -> dict:
 async def discover_influencers(keywords: List[str], platforms: List[str]) -> List[dict]:
     PLATFORM_URLS = {
         "instagram": "https://www.instagram.com/explore/tags/{keyword}/",
-        "tiktok":    "https://www.tiktok.com/search?q={keyword}",
+        "twitter":   "https://x.com/search?q={keyword}&src=typed_query",
         "youtube":   "https://www.youtube.com/results?search_query={keyword}+influencer"
     }
 

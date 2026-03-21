@@ -12,7 +12,7 @@ Built for the **TinyFish × HackerEarth $2M Pre-Accelerator Hackathon 2026**.
 ## ✨ Features
 
 - **Automated Discovery**: Submit a brand brief, and our LLM expands it into search keywords to find the best-fit creators.
-- **Parallel AI Agents**: Fires over 100 parallel browser agents across Instagram, TikTok, and YouTube to gather data simultaneously.
+- **Parallel AI Agents**: Fires over 100 parallel browser agents across Instagram, Twitter, and YouTube to gather data simultaneously.
 - **Brand Safety Audit**: Autonomous agents scan Google, Reddit, and Twitter/X to ensure candidates are safe for your brand.
 - **Fair Pricing Engine**: Benchmarks influencer rates against market standards to ensure you don't overpay.
 - **Intelligent Scoring**: Ranks candidates based on engagement quality, brand fit, risk score, and price fairness using Llama 3.2.
@@ -162,7 +162,7 @@ Four agent types run in parallel via `asyncio.gather` for maximum temporal effic
 
 | Agent | Task | Data Sources |
 |---|---|---|
-| **Discovery** | Find matching profiles by keyword | Instagram, TikTok, YouTube |
+| **Discovery** | Find matching profiles by keyword | Instagram, Twitter, YouTube |
 | **Qualification** | Pull engagement stats per profile | Platform profile pages |
 | **Audit** | Brand safety & sentiment check | Google, Reddit, Twitter/X |
 | **Pricing** | Rate benchmarks & estimations | Google Search (live market data) |

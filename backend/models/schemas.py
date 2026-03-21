@@ -4,7 +4,7 @@ from enum import Enum
 
 class Platform(str, Enum):
     instagram = "instagram"
-    tiktok = "tiktok"
+    twitter = "twitter"
     youtube = "youtube"
 
 class RiskFlag(str, Enum):

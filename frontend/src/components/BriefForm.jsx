@@ -124,7 +124,7 @@ export default function BriefForm({ onSubmit }) {
           <div className="form-field">
             <div className="field-label">PLATFORMS *</div>
             <div className="platform-row">
-              {["instagram", "tiktok", "youtube"].map((p) => (
+              {["instagram", "twitter", "youtube"].map((p) => (
                 <button
                   key={p}
                   className={`platform-btn ${form.platforms.includes(p) ? "active" : ""}`}
