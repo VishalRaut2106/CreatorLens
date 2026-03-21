@@ -73,9 +73,9 @@ def save_results(job_id: str, results: list):
              risk_flag, risk_evidence, price_low, price_high, composite_score, ai_summary)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """, (
-            job_id, r["handle"], r["platform"], r["followers"], r["engagement_rate"],
-            r["risk_flag"], r.get("risk_evidence"), r["price_low"], r["price_high"],
-            r["composite_score"], r["ai_summary"]
+            job_id, r.get("handle"), r.get("platform"), r.get("followers", 0), r.get("engagement_rate", 0.0),
+            r.get("risk_flag", "green"), r.get("risk_evidence"), r.get("price_low", 0), r.get("price_high", 0),
+            r.get("composite_score", 0), r.get("ai_summary", "")
         ))
     conn.commit()
     conn.close()

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from models.schemas import BrandBrief, CampaignResponse, JobStatus
 from db.database import create_job, update_job_status, save_results, get_job
-from services.tinyfish import discover_influencers, run_full_audit
+from services.tinyfish import discover_influencers, run_full_audit, cancel_all_runs, active_runs
 from services.scoring import score_influencers, expand_keywords
 import uuid
 import json
@@ -42,6 +42,17 @@ def get_status(job_id: str):
         status=JobStatus(job["status"]),
         results=dossiers
     )
+
+
+# -----------------------------------------------------------
+# POST /api/cancel-agents  — emergency stop
+# -----------------------------------------------------------
+@router.post("/cancel-agents")
+async def cancel_agents():
+    print(f"\n[CANCEL] Cancel requested — {len(active_runs)} active runs")
+    result = await cancel_all_runs()
+    print(f"[CANCEL] Done: {result}")
+    return result
 
 
 # -----------------------------------------------------------
@@ -90,6 +101,10 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             update_job_status(job_id, "failed")
             return
 
+        # Cap to top 10 by followers before audit — saves agent calls
+        profiles = sorted(profiles, key=lambda x: x.get("followers", 0), reverse=True)[:10]
+        print(f"[STEP 2] Capped to top {len(profiles)} profiles by followers")
+
         # Step 3: Qualify + audit + pricing (parallel batch)
         print(f"\n[STEP 3] Running full audit (qual + audit + pricing)...")
         try:
@@ -105,6 +120,18 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
         print(f"\n[STEP 4] Scoring via Ollama...")
         try:
             scored = await score_influencers(enriched, brief_dict)
+
+            # Merge raw stats back onto scored results
+            enriched_map = {p["handle"]: p for p in enriched}
+            for s in scored:
+                raw = enriched_map.get(s.get("handle"), {})
+                s.setdefault("followers", raw.get("followers", 0))
+                s.setdefault("engagement_rate", raw.get("engagement_rate", 0.0))
+                s.setdefault("price_low", raw.get("price_low", 0))
+                s.setdefault("price_high", raw.get("price_high", 0))
+                s.setdefault("risk_flag", raw.get("risk_flag", "green"))
+                s.setdefault("risk_evidence", raw.get("risk_evidence"))
+
             print(f"[STEP 4] ✓ Scored {len(scored)} influencers")
             for s in scored[:3]:
                 print(f"  - {s.get('handle')}: score={s.get('composite_score')}")
