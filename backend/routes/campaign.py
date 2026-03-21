@@ -101,8 +101,8 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             update_job_status(job_id, "failed")
             return
 
-        # Cap to top 10 by followers before audit — saves agent calls
-        profiles = sorted(profiles, key=lambda x: x.get("followers", 0), reverse=True)[:10]
+        # Cap to top 5 by followers before audit — saves agent calls
+        profiles = sorted(profiles, key=lambda x: x.get("followers", 0), reverse=True)[:5]
         print(f"[STEP 2] Capped to top {len(profiles)} profiles by followers")
 
         # Step 3: Qualify + audit + pricing (parallel batch)
