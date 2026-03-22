@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import json
 
 DB_PATH = "creatorlens.db"
 
@@ -30,6 +31,7 @@ def init_db():
             engagement_rate  REAL,
             risk_flag        TEXT,
             risk_evidence    TEXT,
+            risk_sources     TEXT,
             price_low        INTEGER,
             price_high       INTEGER,
             composite_score  REAL,
@@ -70,11 +72,14 @@ def save_results(job_id: str, results: list):
         conn.execute("""
             INSERT INTO influencer_results
             (job_id, handle, platform, followers, engagement_rate,
-             risk_flag, risk_evidence, price_low, price_high, composite_score, ai_summary)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+             risk_flag, risk_evidence, risk_sources, price_low, price_high, composite_score, ai_summary)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
-            job_id, r.get("handle"), r.get("platform"), r.get("followers", 0), r.get("engagement_rate", 0.0),
-            r.get("risk_flag", "green"), r.get("risk_evidence"), r.get("price_low", 0), r.get("price_high", 0),
+            job_id, r.get("handle"), r.get("platform"), 
+            r.get("followers", 0), r.get("engagement_rate", 0.0),
+            r.get("risk_flag", "green"), r.get("risk_evidence"),
+            json.dumps(r.get("risk_sources", [])),
+            r.get("price_low", 0), r.get("price_high", 0),
             r.get("composite_score", 0), r.get("ai_summary", "")
         ))
     conn.commit()
@@ -88,4 +93,13 @@ def get_job(job_id: str):
         (job_id,)
     ).fetchall()
     conn.close()
-    return job, results
+    # Parse risk_sources JSON string back to list
+    parsed = []
+    for r in results:
+        d = dict(r)
+        try:
+            d["risk_sources"] = json.loads(d.get("risk_sources") or "[]")
+        except Exception:
+            d["risk_sources"] = []
+        parsed.append(d)
+    return job, parsed

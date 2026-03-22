@@ -24,15 +24,36 @@ function scoreClass(s) {
 }
 
 function RiskBadge({ flag }) {
-  return (
-    <span className={`risk-badge ${flag || "green"}`}>
-      {(flag || "green").toUpperCase()}
-    </span>
-  )
+  const config = {
+    red:   { label: "🚨 RED FLAG", cls: "red" },
+    amber: { label: "⚠️ REVIEW",   cls: "amber" },
+    green: { label: "✅ SAFE",     cls: "green" },
+  }
+  const { label, cls } = config[flag] || config.green
+  return <span className={`risk-badge ${cls}`}>{label}</span>
 }
 
-function DossierPanel({ influencer }) {
+function DossierPanel({ influencer, jobId }) {
   const bd = influencer.score_breakdown || {}
+  const [outreach, setOutreach] = useState(null)
+  const [loadingOutreach, setLoadingOutreach] = useState(false)
+
+  const generateOutreach = async () => {
+    setLoadingOutreach(true)
+    try {
+      const resp = await fetch(
+        `http://localhost:8000/api/outreach/${jobId}/${influencer.handle}`,
+        { method: "POST" }
+      )
+      const data = await resp.json()
+      setOutreach(data.message)
+    } catch (e) {
+      setOutreach("Failed to generate outreach. Try again.")
+    } finally {
+      setLoadingOutreach(false)
+    }
+  }
+
   const breakdown = [
     { label: "ENGAGEMENT", key: "engagement_quality" },
     { label: "BRAND FIT", key: "brand_fit" },
@@ -104,14 +125,217 @@ function DossierPanel({ influencer }) {
         <div className="dossier-summary">{influencer.ai_summary}</div>
       )}
 
-      {(influencer.risk_evidence || influencer.risk_flag !== "green") && (
-        <div className="dossier-risk">
-          <div className="risk-label">BRAND SAFETY INTELLIGENCE</div>
-          <div className={`risk-evidence ${influencer.risk_flag === "red" ? "flagged" : ""}`}>
-            {influencer.risk_evidence || "No significant risk signals detected."}
+      {/* Risk Alert Banner */}
+      {influencer.risk_flag === "red" && (
+        <div style={{
+          background: "rgba(255,61,61,0.08)",
+          border: "1px solid var(--red)",
+          padding: "16px 20px",
+          marginBottom: "16px"
+        }}>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            marginBottom: "10px"
+          }}>
+            <span style={{fontSize: "18px"}}>🚨</span>
+            <span style={{
+              color: "var(--red)",
+              fontSize: "11px",
+              fontWeight: "600",
+              letterSpacing: "0.2em"
+            }}>DO NOT USE — BRAND SAFETY VIOLATION</span>
           </div>
+          <div style={{
+            fontFamily: "var(--sans)",
+            fontSize: "12px",
+            color: "var(--red)",
+            lineHeight: "1.6",
+            fontWeight: "300"
+          }}>
+            {influencer.risk_evidence}
+          </div>
+          {influencer.risk_sources && influencer.risk_sources.length > 0 && (
+            <div style={{marginTop: "10px", display: "flex", flexDirection: "column", gap: "4px"}}>
+              <div style={{fontSize: "9px", color: "var(--amber-dim)", letterSpacing: "0.2em", marginBottom: "4px"}}>
+                SOURCES
+              </div>
+              {influencer.risk_sources.map((src, i) => (
+                <a
+                  key={i}
+                  href={src}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    fontSize: "11px",
+                    color: "var(--text-dim)",
+                    textDecoration: "none",
+                    fontFamily: "var(--mono)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap"
+                  }}
+                  onMouseOver={e => e.target.style.color = "var(--amber)"}
+                  onMouseOut={e => e.target.style.color = "var(--text-dim)"}
+                >
+                  → {src}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       )}
+
+      {influencer.risk_flag === "amber" && (
+        <div style={{
+          background: "rgba(240,165,0,0.06)",
+          border: "1px solid var(--amber-dim)",
+          padding: "16px 20px",
+          marginBottom: "16px"
+        }}>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            marginBottom: "10px"
+          }}>
+            <span style={{fontSize: "18px"}}>⚠️</span>
+            <span style={{
+              color: "var(--amber)",
+              fontSize: "11px",
+              fontWeight: "600",
+              letterSpacing: "0.2em"
+            }}>NEEDS REVIEW — CONTROVERSY DETECTED</span>
+          </div>
+          <div style={{
+            fontFamily: "var(--sans)",
+            fontSize: "12px",
+            color: "var(--text-secondary)",
+            lineHeight: "1.6",
+            fontWeight: "300"
+          }}>
+            {influencer.risk_evidence}
+          </div>
+          {influencer.risk_sources && influencer.risk_sources.length > 0 && (
+            <div style={{marginTop: "10px", display: "flex", flexDirection: "column", gap: "4px"}}>
+              <div style={{fontSize: "9px", color: "var(--amber-dim)", letterSpacing: "0.2em", marginBottom: "4px"}}>
+                SOURCES
+              </div>
+              {influencer.risk_sources.map((src, i) => (
+                <a
+                  key={i}
+                  href={src}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    fontSize: "11px",
+                    color: "var(--text-dim)",
+                    textDecoration: "none",
+                    fontFamily: "var(--mono)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap"
+                  }}
+                  onMouseOver={e => e.target.style.color = "var(--amber)"}
+                  onMouseOut={e => e.target.style.color = "var(--text-dim)"}
+                >
+                  → {src}
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {influencer.risk_flag === "green" && (
+        <div style={{
+          background: "rgba(0,200,83,0.05)",
+          border: "1px solid var(--green-dim)",
+          padding: "14px 20px",
+          marginBottom: "16px",
+          display: "flex",
+          alignItems: "center",
+          gap: "10px"
+        }}>
+          <span style={{fontSize: "16px"}}>✅</span>
+          <span style={{
+            color: "var(--green)",
+            fontSize: "11px",
+            fontWeight: "600",
+            letterSpacing: "0.2em"
+          }}>BRAND SAFE — NO RISK SIGNALS DETECTED</span>
+        </div>
+      )}
+
+      {/* Outreach Draft */}
+      <div style={{ marginTop: "16px" }}>
+        <button
+          onClick={generateOutreach}
+          disabled={loadingOutreach}
+          style={{
+            background: "transparent",
+            border: "1px solid var(--amber-dim)",
+            color: loadingOutreach ? "var(--text-dim)" : "var(--amber)",
+            fontFamily: "var(--mono)",
+            fontSize: "11px",
+            letterSpacing: "0.15em",
+            padding: "8px 20px",
+            cursor: loadingOutreach ? "not-allowed" : "pointer",
+            transition: "all 0.1s",
+            width: "100%"
+          }}
+        >
+          {loadingOutreach ? "GENERATING OUTREACH..." : "✉ DRAFT OUTREACH MESSAGE"}
+        </button>
+
+        {outreach && (
+          <div style={{
+            marginTop: "12px",
+            border: "1px solid var(--border)",
+            padding: "16px 20px",
+            animation: "fadeIn 0.2s ease"
+          }}>
+            <div style={{
+              fontSize: "9px",
+              color: "var(--amber-dim)",
+              letterSpacing: "0.2em",
+              marginBottom: "10px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center"
+            }}>
+              <span>OUTREACH DRAFT</span>
+              <button
+                onClick={() => navigator.clipboard.writeText(outreach)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--text-dim)",
+                  fontFamily: "var(--mono)",
+                  fontSize: "9px",
+                  letterSpacing: "0.15em",
+                  cursor: "pointer"
+                }}
+                onMouseOver={e => e.target.style.color = "var(--amber)"}
+                onMouseOut={e => e.target.style.color = "var(--text-dim)"}
+              >
+                COPY →
+              </button>
+            </div>
+            <div style={{
+              fontFamily: "var(--sans)",
+              fontSize: "13px",
+              color: "var(--text-secondary)",
+              lineHeight: "1.7",
+              fontWeight: "300",
+              whiteSpace: "pre-wrap"
+            }}>
+              {outreach}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -259,7 +483,7 @@ export default function Dashboard({ jobId, onComplete, onReset, loading, results
         ))}
       </div>
 
-      {data[selected] && <DossierPanel influencer={data[selected]} />}
+      {data[selected] && <DossierPanel influencer={data[selected]} jobId={jobId} />}
     </div>
   )
 }

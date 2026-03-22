@@ -1,8 +1,8 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from models.schemas import BrandBrief, CampaignResponse, JobStatus
-from db.database import create_job, update_job_status, save_results, get_job
+from db.database import create_job, update_job_status, save_results, get_job, get_conn
 from services.tinyfish import discover_influencers, run_full_audit, cancel_all_runs, active_runs
-from services.scoring import score_influencers, expand_keywords
+from services.scoring import score_influencers, expand_keywords, draft_outreach
 import uuid
 import json
 import traceback
@@ -24,6 +24,18 @@ async def run_campaign(brief: BrandBrief, background_tasks: BackgroundTasks):
 
 
 # -----------------------------------------------------------
+# GET /api/campaigns
+# -----------------------------------------------------------
+@router.get("/campaigns")
+def get_campaigns():
+    conn = get_conn()
+    jobs = conn.execute(
+        "SELECT job_id, status, brief_json, created_at, completed_at FROM jobs ORDER BY created_at DESC LIMIT 20"
+    ).fetchall()
+    conn.close()
+    return [dict(j) for j in jobs]
+
+# -----------------------------------------------------------
 # GET /api/status/{job_id}
 # -----------------------------------------------------------
 @router.get("/status/{job_id}", response_model=CampaignResponse)
@@ -42,6 +54,28 @@ def get_status(job_id: str):
         status=JobStatus(job["status"]),
         results=dossiers
     )
+
+
+# -----------------------------------------------------------
+# POST /api/outreach/{job_id}/{handle}
+# -----------------------------------------------------------
+@router.post("/outreach/{job_id}/{handle}")
+async def generate_outreach(job_id: str, handle: str):
+    job, results = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Find the influencer
+    influencer = next((r for r in results if r.get("handle") == handle), None)
+    if not influencer:
+        raise HTTPException(status_code=404, detail="Influencer not found")
+
+    # Get the brief
+    import json
+    brief = json.loads(job["brief_json"])
+
+    message = await draft_outreach(influencer, brief)
+    return {"handle": handle, "message": message}
 
 
 # -----------------------------------------------------------
@@ -101,9 +135,9 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             update_job_status(job_id, "failed")
             return
 
-        # Cap to top 5 by followers before audit — saves agent calls
-        profiles = sorted(profiles, key=lambda x: x.get("followers", 0), reverse=True)[:5]
-        print(f"[STEP 2] Capped to top {len(profiles)} profiles by followers")
+        # Cap to top 1 by followers before audit — saves agent calls
+        profiles = sorted(profiles, key=lambda x: x.get("followers", 0), reverse=True)[:1]
+        print(f"[STEP 2] Capped to top {len(profiles)} profile by followers")
 
         # Step 3: Qualify + audit + pricing (parallel batch)
         print(f"\n[STEP 3] Running full audit (qual + audit + pricing)...")

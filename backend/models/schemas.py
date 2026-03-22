@@ -4,8 +4,9 @@ from enum import Enum
 
 class Platform(str, Enum):
     instagram = "instagram"
-    twitter = "twitter"
+    tiktok = "tiktok"
     youtube = "youtube"
+    twitter = "twitter"
 
 class RiskFlag(str, Enum):
     green = "green"
@@ -27,14 +28,15 @@ class BrandBrief(BaseModel):
 class InfluencerDossier(BaseModel):
     handle: str
     platform: Platform
-    followers: int
-    engagement_rate: float
-    risk_flag: RiskFlag
-    risk_evidence: Optional[str]
-    price_low: int
-    price_high: int
-    composite_score: float              # 0-100
-    ai_summary: str
+    followers: Optional[int] = 0
+    engagement_rate: Optional[float] = None
+    risk_flag: RiskFlag = RiskFlag.green
+    risk_evidence: Optional[str] = None
+    risk_sources: Optional[List] = []
+    price_low: Optional[int] = 0
+    price_high: Optional[int] = 0
+    composite_score: Optional[float] = 0.0
+    ai_summary: Optional[str] = ""
 
 class JobStatus(str, Enum):
     pending = "pending"

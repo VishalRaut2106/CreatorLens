@@ -1,6 +1,7 @@
 import { useState } from "react"
 import BriefForm from "./components/BriefForm"
 import Dashboard from "./components/Dashboard"
+import CampaignHistory from "./components/CampaignHistory"
 import "./App.css"
 
 export default function App() {
@@ -24,6 +25,14 @@ export default function App() {
     setResults(null)
   }
 
+  const handleSelectFromHistory = async (jobId) => {
+    setJobId(jobId)
+    const resp = await fetch(`http://localhost:8000/api/status/${jobId}`)
+    const data = await resp.json()
+    setResults(data.results)
+    setScreen("results")
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -34,11 +43,33 @@ export default function App() {
         <div className="header-right">
           <span className="status-dot" />
           <span className="status-text">LIVE</span>
+          <button
+            onClick={() => setScreen("history")}
+            style={{
+              background: "transparent",
+              border: "1px solid var(--border-bright)",
+              color: "var(--text-secondary)",
+              fontFamily: "var(--mono)",
+              fontSize: "10px",
+              letterSpacing: "0.15em",
+              padding: "4px 12px",
+              cursor: "pointer",
+              marginLeft: "16px"
+            }}
+          >
+            HISTORY
+          </button>
         </div>
       </header>
 
       <main className="main">
         {screen === "form" && <BriefForm onSubmit={handleSubmit} />}
+        {screen === "history" && (
+          <CampaignHistory
+            onSelect={handleSelectFromHistory}
+            onBack={() => setScreen("form")}
+          />
+        )}
         {screen === "loading" && (
           <Dashboard
             jobId={jobId}

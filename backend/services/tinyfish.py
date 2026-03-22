@@ -76,6 +76,7 @@ async def discover_influencers(keywords: List[str], platforms: List[str]) -> Lis
             )
             tasks.append(run_agent(url, goal, stealth=True))
 
+    tasks = tasks[:1]
     print(f"  [DISCOVERY] Firing {len(tasks)} agents in parallel...")
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -130,11 +131,18 @@ async def qualify_profile(profile: dict) -> dict:
 # -----------------------------------------------------------
 async def audit_profile(profile: dict) -> dict:
     handle = profile["handle"]
-    url    = f"https://www.google.com/search?q={handle}+influencer+controversy+scandal"
+    url = f"https://www.google.com/search?q={handle}+influencer+controversy+scandal"
     goal = (
         f'Search for any controversy, scandal, or brand risk associated with "{handle}". '
+        f'Look at the actual search results and news articles on the page. '
         f'Return ONLY a raw JSON object, no markdown, no explanation. '
-        f'Format: {{"handle": "{handle}", "risk_flag": "green or amber or red based on findings", "risk_evidence": "summary of findings or null if none"}}'
+        f'Format: {{'
+        f'"handle": "{handle}", '
+        f'"risk_flag": "green or amber or red based on findings", '
+        f'"risk_evidence": "detailed summary of findings or null if none", '
+        f'"risk_sources": ["paste the actual URLs of the news articles or pages you found as evidence"]'
+        f'}}'
+        f'If no controversy found, return risk_flag as green and risk_sources as empty array [].'
     )
     result = await run_agent(url, goal, stealth=False)
     return {"handle": handle, "platform": profile["platform"], **result}
