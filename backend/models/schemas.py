@@ -7,6 +7,7 @@ class Platform(str, Enum):
     tiktok = "tiktok"
     youtube = "youtube"
     twitter = "twitter"
+    twitch = "twitch"
 
 class RiskFlag(str, Enum):
     green = "green"
@@ -22,6 +23,7 @@ class BrandBrief(BaseModel):
     budget_max: int
     platforms: List[Platform]
     keywords: Optional[List[str]] = []  # optional extra keywords
+    competitor_brand: Optional[str] = None  # NEW
 
 # --- Response ---
 
@@ -30,13 +32,15 @@ class InfluencerDossier(BaseModel):
     platform: Platform
     followers: Optional[int] = 0
     engagement_rate: Optional[float] = None
-    risk_flag: RiskFlag = RiskFlag.green
+    risk_flag: Optional[RiskFlag] = RiskFlag.green
     risk_evidence: Optional[str] = None
     risk_sources: Optional[List] = []
     price_low: Optional[int] = 0
     price_high: Optional[int] = 0
     composite_score: Optional[float] = 0.0
     ai_summary: Optional[str] = ""
+    competitor_flag: Optional[bool] = False
+    competitor_evidence: Optional[str] = None
 
 class JobStatus(str, Enum):
     pending = "pending"

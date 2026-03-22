@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 
-const API = "http://localhost:8000/api"
+const API = (import.meta.env.VITE_API_URL || "http://localhost:8000") + "/api"
 
 const STEPS = [
   { id: 1, name: "Keyword expansion via Ollama" },
@@ -11,7 +11,7 @@ const STEPS = [
 ]
 
 function fmt(n) {
-  if (!n) return "—"
+  if (!n || n === 0) return "N/A"
   if (n >= 1000000) return (n / 1000000).toFixed(1) + "M"
   if (n >= 1000) return (n / 1000).toFixed(0) + "K"
   return n
@@ -21,6 +21,23 @@ function scoreClass(s) {
   if (s >= 75) return "high"
   if (s >= 45) return "mid"
   return "low"
+}
+
+function CompetitorBadge() {
+  return (
+    <span style={{
+      fontSize: "9px",
+      letterSpacing: "0.12em",
+      padding: "2px 8px",
+      background: "rgba(79,195,247,0.1)",
+      color: "var(--blue)",
+      border: "1px solid #185FA5",
+      fontWeight: 600,
+      marginLeft: 6
+    }}>
+      TAKEN
+    </span>
+  )
 }
 
 function RiskBadge({ flag }) {
@@ -42,7 +59,7 @@ function DossierPanel({ influencer, jobId }) {
     setLoadingOutreach(true)
     try {
       const resp = await fetch(
-        `http://localhost:8000/api/outreach/${jobId}/${influencer.handle}`,
+        `${API}/outreach/${jobId}/${influencer.handle}`,
         { method: "POST" }
       )
       const data = await resp.json()
@@ -79,7 +96,9 @@ function DossierPanel({ influencer, jobId }) {
       <div className="dossier-grid">
         <div className="dossier-stat">
           <div className="stat-label">FOLLOWERS</div>
-          <div className="stat-value">{fmt(influencer.followers)}</div>
+          <div className="stat-value">
+            {influencer.followers ? fmt(influencer.followers) : "Not retrieved"}
+          </div>
         </div>
         <div className="dossier-stat">
           <div className="stat-label">ENGAGEMENT</div>
@@ -123,6 +142,28 @@ function DossierPanel({ influencer, jobId }) {
 
       {influencer.ai_summary && (
         <div className="dossier-summary">{influencer.ai_summary}</div>
+      )}
+
+      {influencer.competitor_flag && (
+        <div style={{
+          background: "rgba(79,195,247,0.06)",
+          border: "1px solid #185FA5",
+          padding: "14px 20px",
+          marginBottom: "16px",
+          display: "flex",
+          gap: "10px",
+          alignItems: "flex-start"
+        }}>
+          <span style={{fontSize: "16px"}}>⚡</span>
+          <div>
+            <div style={{fontSize: "11px", color: "var(--blue)", fontWeight: 600, letterSpacing: "0.15em", marginBottom: 6}}>
+              ALREADY USED BY COMPETITOR
+            </div>
+            <div style={{fontSize: "12px", color: "var(--text-secondary)", fontFamily: "var(--sans)", lineHeight: 1.6}}>
+              {influencer.competitor_evidence || "This influencer has an existing partnership with your competitor."}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Risk Alert Banner */}
@@ -340,7 +381,7 @@ function DossierPanel({ influencer, jobId }) {
   )
 }
 
-export default function Dashboard({ jobId, onComplete, onReset, loading, results }) {
+export default function Dashboard({ jobId, onComplete, onReset, loading, results, competitorBrand }) {
   const [currentStep, setCurrentStep] = useState(1)
   const [ticker, setTicker] = useState("Initialising pipeline...")
   const [selected, setSelected] = useState(0)
@@ -351,8 +392,8 @@ export default function Dashboard({ jobId, onComplete, onReset, loading, results
 
     const messages = [
       "Expanding keywords with Ollama...",
-      "Firing discovery agents across Instagram, Twitter, YouTube...",
-      "Running parallel audit agents — engagement, brand safety, pricing...",
+      "Firing discovery agents + competitor intel agent simultaneously...",
+      "Running parallel audit — engagement, brand safety, pricing all at once...",
       "Scoring and ranking candidates with LLM...",
       "Saving results to database...",
     ]
@@ -423,6 +464,47 @@ export default function Dashboard({ jobId, onComplete, onReset, loading, results
           <div className="ticker-label">STATUS</div>
           {ticker}
         </div>
+
+        {currentStep === 3 && (
+          <div style={{
+            border: "1px solid var(--border)",
+            padding: "16px 20px",
+            marginTop: "16px",
+            fontFamily: "var(--mono)",
+            fontSize: "11px"
+          }}>
+            <div style={{fontSize: "9px", color: "var(--amber)", letterSpacing: "0.2em", marginBottom: "12px"}}>
+              AGENTS RUNNING IN PARALLEL
+            </div>
+            {[
+              "Qualification agent → pulling engagement stats...",
+              "Brand safety agent → scanning Google, Reddit, Twitter/X...",
+              "Pricing agent → benchmarking Collabstr rates...",
+              competitorBrand 
+                ? `Competitor intel → auditing ${competitorBrand} partnerships...`
+                : null
+            ].filter(Boolean).map((msg, i, arr) => (
+              <div key={i} style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                padding: "6px 0",
+                borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none",
+                color: "var(--text-secondary)"
+              }}>
+                <span style={{
+                  width: "6px", height: "6px",
+                  borderRadius: "50%",
+                  background: "var(--amber)",
+                  animation: "pulse 1s infinite",
+                  animationDelay: `${i * 0.2}s`,
+                  flexShrink: 0
+                }}/>
+                {msg}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     )
   }
@@ -461,7 +543,10 @@ export default function Dashboard({ jobId, onComplete, onReset, loading, results
             onClick={() => setSelected(i)}
           >
             <div>
-              <div className="influencer-name">@{inf.handle}</div>
+              <div className="influencer-name">
+                @{inf.handle}
+                {inf.competitor_flag && <CompetitorBadge />}
+              </div>
               <div className="influencer-platform">{(inf.platform || "").toUpperCase()}</div>
             </div>
             <span className="cell-value">{fmt(inf.followers)}</span>

@@ -1,6 +1,7 @@
 import { useState } from "react"
 
-const API = "http://localhost:8000/api"
+const API = (import.meta.env.VITE_API_URL || "http://localhost:8000") + "/api"
+
 
 export default function BriefForm({ onSubmit }) {
   const [form, setForm] = useState({
@@ -10,6 +11,7 @@ export default function BriefForm({ onSubmit }) {
     budget_max: "",
     platforms: ["instagram"],
     keywords: [],
+    competitor_brand: "",
   })
   const [keywordInput, setKeywordInput] = useState("")
   const [loading, setLoading] = useState(false)
@@ -55,7 +57,7 @@ export default function BriefForm({ onSubmit }) {
       })
       const data = await resp.json()
       if (data.job_id) {
-        onSubmit(data.job_id)
+        onSubmit(data.job_id, form)
       } else {
         setError("Unexpected response from server.")
       }
@@ -159,6 +161,16 @@ export default function BriefForm({ onSubmit }) {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+        <div className="form-row full">
+          <div className="form-field">
+            <div className="field-label">COMPETITOR BRAND (optional)</div>
+            <input
+              placeholder="e.g. Mamaearth, Nykaa — find who they use"
+              value={form.competitor_brand || ""}
+              onChange={(e) => setForm({ ...form, competitor_brand: e.target.value })}
+            />
           </div>
         </div>
       </div>

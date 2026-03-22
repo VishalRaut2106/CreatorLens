@@ -9,6 +9,10 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 SCORING_SYSTEM_PROMPT = """
 You are an influencer marketing analyst. Score each influencer candidate based on available data.
 
+CRITICAL: Only score the exact influencers provided in the candidate data. 
+Do NOT add, invent, or include any influencers not in the input list.
+Return ONLY the influencers from the provided data.
+
 Return ONLY a valid JSON array. No markdown, no explanation, no backticks.
 
 Each object must have:

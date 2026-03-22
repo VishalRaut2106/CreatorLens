@@ -8,9 +8,15 @@ export default function App() {
   const [screen, setScreen] = useState("form") // "form" | "loading" | "results"
   const [jobId, setJobId] = useState(null)
   const [results, setResults] = useState(null)
+  const [competitorBrand, setCompetitorBrand] = useState(null)
 
-  const handleSubmit = (id) => {
+  const handleSubmit = (id, formObj) => {
     setJobId(id)
+    if (formObj && formObj.competitor_brand) {
+      setCompetitorBrand(formObj.competitor_brand)
+    } else {
+      setCompetitorBrand(null)
+    }
     setScreen("loading")
   }
 
@@ -27,7 +33,8 @@ export default function App() {
 
   const handleSelectFromHistory = async (jobId) => {
     setJobId(jobId)
-    const resp = await fetch(`http://localhost:8000/api/status/${jobId}`)
+    const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
+    const resp = await fetch(`${API_URL}/api/status/${jobId}`)
     const data = await resp.json()
     setResults(data.results)
     setScreen("results")
@@ -76,6 +83,7 @@ export default function App() {
             onComplete={handleComplete}
             onReset={handleReset}
             loading={true}
+            competitorBrand={competitorBrand}
           />
         )}
         {screen === "results" && (

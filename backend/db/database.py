@@ -66,18 +66,29 @@ def update_job_status(job_id: str, status: str):
     conn.commit()
     conn.close()
 
+VALID_PLATFORMS = {"instagram", "tiktok", "youtube", "twitter"}
+
 def save_results(job_id: str, results: list):
     conn = get_conn()
     for r in results:
+        platform = r.get("platform") or "instagram"
+        platform = platform.lower()
+        if platform not in VALID_PLATFORMS:
+            platform = "instagram"
+            
+        risk_flag = r.get("risk_flag") or "green"
+        if risk_flag not in ("green", "amber", "red"):
+            risk_flag = "green"
+
         conn.execute("""
             INSERT INTO influencer_results
             (job_id, handle, platform, followers, engagement_rate,
              risk_flag, risk_evidence, risk_sources, price_low, price_high, composite_score, ai_summary)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
-            job_id, r.get("handle"), r.get("platform"), 
+            job_id, r.get("handle"), platform, 
             r.get("followers", 0), r.get("engagement_rate", 0.0),
-            r.get("risk_flag", "green"), r.get("risk_evidence"),
+            risk_flag, r.get("risk_evidence"),
             json.dumps(r.get("risk_sources", [])),
             r.get("price_low", 0), r.get("price_high", 0),
             r.get("composite_score", 0), r.get("ai_summary", "")

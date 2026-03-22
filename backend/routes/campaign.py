@@ -1,11 +1,12 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from models.schemas import BrandBrief, CampaignResponse, JobStatus
 from db.database import create_job, update_job_status, save_results, get_job, get_conn
-from services.tinyfish import discover_influencers, run_full_audit, cancel_all_runs, active_runs
+from services.tinyfish import discover_influencers, run_full_audit, cancel_all_runs, active_runs, find_competitor_influencers
 from services.scoring import score_influencers, expand_keywords, draft_outreach
 import uuid
 import json
 import traceback
+import asyncio
 
 router = APIRouter()
 
@@ -89,6 +90,18 @@ async def cancel_agents():
     return result
 
 
+@router.post("/competitor-intel")
+async def competitor_intel(body: dict):
+    competitor = body.get("competitor_brand")
+    if not competitor:
+        raise HTTPException(status_code=400, detail="competitor_brand required")
+    
+    print(f"[COMPETITOR] Searching for {competitor} influencers...")
+    results = await find_competitor_influencers(competitor)
+    print(f"[COMPETITOR] Found {len(results)} partnerships")
+    return {"competitor": competitor, "influencers": results}
+
+
 # -----------------------------------------------------------
 # Background pipeline
 # -----------------------------------------------------------
@@ -114,13 +127,37 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             update_job_status(job_id, "failed")
             return
 
-        # Step 2: Discover influencer profiles
+        # Step 2: Discover influencer profiles + competitor intel in parallel
         print(f"\n[STEP 2] Discovering influencers via TinyFish...")
         try:
-            profiles = await discover_influencers(
+            competitor_task = None
+            if brief.competitor_brand:
+                print(f"  [COMPETITOR] Searching for {brief.competitor_brand} partnerships...")
+                competitor_task = find_competitor_influencers(brief.competitor_brand)
+
+            profiles_task = discover_influencers(
                 keywords=keywords,
                 platforms=[p.value for p in brief.platforms]
             )
+
+            if competitor_task:
+                profiles, competitor_profiles = await asyncio.gather(profiles_task, competitor_task)
+                print(f"  [COMPETITOR] Found {len(competitor_profiles)} partnerships")
+                
+                competitor_handles = {p.get("handle", "").lower().replace("@", "") for p in competitor_profiles}
+                # Flag profiles already used by competitor
+                for p in profiles:
+                    handle = p.get("handle", "").lower().replace("@", "")
+                    if handle in competitor_handles:
+                        p["competitor_flag"] = True
+                        p["competitor_evidence"] = next(
+                            (c.get("evidence") for c in competitor_profiles 
+                             if c.get("handle", "").lower().replace("@", "") == handle),
+                            None
+                        )
+            else:
+                profiles = await profiles_task
+
             print(f"[STEP 2] ✓ Found {len(profiles)} profiles")
             for p in profiles[:5]:
                 print(f"  - {p.get('handle')} ({p.get('platform')})")
@@ -163,8 +200,14 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
                 s.setdefault("engagement_rate", raw.get("engagement_rate", 0.0))
                 s.setdefault("price_low", raw.get("price_low", 0))
                 s.setdefault("price_high", raw.get("price_high", 0))
-                s.setdefault("risk_flag", raw.get("risk_flag", "green"))
+                
+                
+                # Graceful fallback for risk_flag if literal None is returned
+                r_flag = raw.get("risk_flag")
+                s.setdefault("risk_flag", r_flag if r_flag else "green")
                 s.setdefault("risk_evidence", raw.get("risk_evidence"))
+                s.setdefault("risk_sources", [])
+                s.setdefault("platform", "instagram")
 
             print(f"[STEP 4] ✓ Scored {len(scored)} influencers")
             for s in scored[:3]:

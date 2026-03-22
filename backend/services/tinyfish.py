@@ -26,7 +26,7 @@ async def run_agent(url: str, goal: str, stealth: bool = False) -> dict:
         "browser_profile": "stealth" if stealth else "lite"
     }
 
-    async with httpx.AsyncClient(timeout=120 if stealth else 60) as client:
+    async with httpx.AsyncClient(timeout=180 if stealth else 90) as client:
         async with client.stream("POST", TINYFISH_URL, headers=_get_headers(), json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
@@ -115,7 +115,8 @@ async def discover_influencers(keywords: List[str], platforms: List[str]) -> Lis
 # Step 2a: Qualification — engagement stats per profile
 # -----------------------------------------------------------
 async def qualify_profile(profile: dict) -> dict:
-    url = profile.get("profile_url", f'https://www.instagram.com/{profile["handle"]}/')
+    platform = profile.get("platform", "instagram")
+    url = profile.get("profile_url", f'https://www.{platform}.com/{profile["handle"]}/')
     goal = (
         f'Visit this Instagram profile page and extract stats. '
         f'Return ONLY a raw JSON object, no markdown. '
@@ -237,3 +238,24 @@ async def cancel_all_runs() -> dict:
         if not isinstance(r, Exception) and r.status_code in (200, 204)
     )
     return {"cancelled": cancelled, "total": len(run_ids)}
+
+
+# -----------------------------------------------------------
+# Competitor Intel
+# -----------------------------------------------------------
+async def find_competitor_influencers(competitor_brand: str) -> List[dict]:
+    url = f"https://www.google.com/search?q={competitor_brand}+influencer+ambassador+sponsored+partnership"
+    goal = (
+        f'Find which influencers or brand ambassadors {competitor_brand} has worked with. '
+        f'Look for sponsored posts, brand deals, ambassador partnerships. '
+        f'Return ONLY a raw JSON array, no markdown, no explanation. '
+        f'Format: [{{"handle": "username", "platform": "instagram/youtube/twitter", '
+        f'"evidence": "brief description of the partnership found"}}]. '
+        f'Max 5 results. Only real confirmed partnerships.'
+    )
+    result = await run_agent(url, goal, stealth=False)
+    if isinstance(result, list):
+        return result
+    keys = list(result.keys())
+    return result.get(keys[0], []) if keys else []
+

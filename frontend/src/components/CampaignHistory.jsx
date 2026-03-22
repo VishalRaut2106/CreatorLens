@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 
-const API = "http://localhost:8000/api"
+const API = (import.meta.env.VITE_API_URL || "http://localhost:8000") + "/api"
+
 
 export default function CampaignHistory({ onSelect, onBack }) {
   const [campaigns, setCampaigns] = useState([])
