@@ -29,6 +29,7 @@ async def run_agent(url: str, goal: str, stealth: bool = False) -> dict:
     async with httpx.AsyncClient(timeout=180 if stealth else 90) as client:
         async with client.stream("POST", TINYFISH_URL, headers=_get_headers(), json=payload) as resp:
             resp.raise_for_status()
+            current_run_id = None
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
                     continue
@@ -36,11 +37,15 @@ async def run_agent(url: str, goal: str, stealth: bool = False) -> dict:
 
                 # Track run_id when agent starts
                 if event.get("type") == "STARTED":
-                    run_id = event.get("run_id")
-                    if run_id:
-                        active_runs.append(run_id)
+                    current_run_id = event.get("run_id")
+                    if current_run_id:
+                        active_runs.append(current_run_id)
+                        print(f"  [AGENT FIRED] {current_run_id} -> {url}")
 
                 if event.get("type") == "COMPLETE":
+                    if current_run_id and current_run_id in active_runs:
+                        active_runs.remove(current_run_id)
+                    
                     result = event.get("result", {})
                     if isinstance(result, str):
                         try:
@@ -76,7 +81,6 @@ async def discover_influencers(keywords: List[str], platforms: List[str]) -> Lis
             )
             tasks.append(run_agent(url, goal, stealth=True))
 
-    tasks = tasks[:1]
     print(f"  [DISCOVERY] Firing {len(tasks)} agents in parallel...")
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -101,7 +105,7 @@ async def discover_influencers(keywords: List[str], platforms: List[str]) -> Lis
         for item in items:
             if not isinstance(item, dict):
                 continue
-            handle = item.get("handle", "").lower().strip()
+            handle = item.get("handle", "").lower().strip().lstrip("@")
             platform = item.get("platform", "")
             key = (handle, platform)
             if handle and key not in seen:
@@ -118,10 +122,12 @@ async def qualify_profile(profile: dict) -> dict:
     platform = profile.get("platform", "instagram")
     url = profile.get("profile_url", f'https://www.{platform}.com/{profile["handle"]}/')
     goal = (
-        f'Visit this Instagram profile page and extract stats. '
-        f'Return ONLY a raw JSON object, no markdown. '
+        f'Visit this {platform} profile page at {url} and extract these stats. '
+        f'Return ONLY a raw JSON object. '
         f'Format: {{"handle": "{profile["handle"]}", "followers": int, '
-        f'"avg_likes": int, "avg_comments": int, "engagement_rate": float}}'
+        f'"avg_likes": int, "avg_comments": int, "engagement_rate": float}} '
+        f'If you cannot find exact numbers, estimate from visible data. '
+        f'Never return null — always return a number even if approximate.'
     )
     result = await run_agent(url, goal, stealth=True)
     return {"handle": profile["handle"], "platform": profile["platform"], **result}
@@ -157,9 +163,11 @@ async def price_profile(profile: dict) -> dict:
     platform = profile["platform"]
     url      = f"https://www.google.com/search?q={handle}+{platform}+influencer+rate+per+post+USD"
     goal = (
-        f'Find the influencer pricing for "{handle}" on {platform}. '
-        f'Return ONLY a raw JSON object, no markdown, no explanation. '
-        f'Format: {{"handle": "{handle}", "price_low": 500, "price_high": 5000}}'
+        f'Find or estimate the influencer pricing for "{handle}" on {platform}. '
+        f'Based on their follower count and niche, estimate a realistic rate range. '
+        f'Return ONLY a raw JSON object. '
+        f'Format: {{"handle": "{handle}", "price_low": int, "price_high": int}} '
+        f'Always return numbers — estimate if exact data not found.'
     )
     result = await run_agent(url, goal)
     return {"handle": handle, "platform": platform, **result}
@@ -188,7 +196,7 @@ async def run_full_audit(profiles: List[dict]) -> List[dict]:
                 print(f"  [AUDIT] Agent error: {r}")
                 continue
             print(f"  [AUDIT] Raw result: {r}")
-            handle = r.get("handle") if isinstance(r, dict) else None
+            handle = r.get("handle", "").lower().strip().lstrip("@") if isinstance(r, dict) else None
             if handle:
                 m[handle] = r
         return m

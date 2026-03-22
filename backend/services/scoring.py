@@ -122,22 +122,29 @@ Target audience: {brief.get('target_audience')}
 
 async def draft_outreach(influencer: dict, brief: dict) -> str:
     user_message = f"""
-Write a short, personalized outreach DM to @{influencer.get('handle')} 
-on behalf of a brand in the "{brief.get('niche')}" space targeting {brief.get('target_audience')}.
+Write a short outreach DM to @{influencer.get('handle')} on behalf of a brand.
+
+Brand details:
+- Niche: {brief.get('niche')}
+- Target audience: {brief.get('target_audience')}
+- Budget: ${brief.get('budget_min')}–${brief.get('budget_max')}
 
 Influencer details:
 - Platform: {influencer.get('platform')}
 - Followers: {influencer.get('followers')}
 - Engagement rate: {influencer.get('engagement_rate')}%
-- AI summary: {influencer.get('ai_summary')}
+- About them: {influencer.get('ai_summary')}
 
 Rules:
 - Max 80 words
-- Friendly and specific to their content
-- Mention their niche naturally
-- Include a clear call to action
-- No emojis
-- Sound human, not corporate
-- Return ONLY the message text, nothing else
+- Mention something SPECIFIC about their content or audience
+- Include the budget range naturally
+- End with a clear question to start conversation
+- Sound like a real human, not a template
+- No emojis, no corporate speak
+- Return ONLY the message, nothing else
 """
-    return await _ollama_chat("You are a brand partnerships manager writing influencer outreach.", user_message)
+    return await _ollama_chat(
+        "You are a brand partnerships manager who writes personalized, genuine outreach messages.",
+        user_message
+    )

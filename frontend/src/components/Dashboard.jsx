@@ -11,7 +11,8 @@ const STEPS = [
 ]
 
 function fmt(n) {
-  if (!n || n === 0) return "N/A"
+  if (n === null || n === undefined) return "N/A"
+  if (n === 0) return "N/A"
   if (n >= 1000000) return (n / 1000000).toFixed(1) + "M"
   if (n >= 1000) return (n / 1000).toFixed(0) + "K"
   return n
@@ -82,7 +83,7 @@ function DossierPanel({ influencer, jobId }) {
     <div className="dossier-panel">
       <div className="dossier-top">
         <div>
-          <div className="dossier-handle">@{influencer.handle}</div>
+          <div className="dossier-handle">@{influencer.handle.replace(/^@+/, "")}</div>
           <div className="dossier-platform">{(influencer.platform || "").toUpperCase()}</div>
         </div>
         <div className="dossier-score-block">
@@ -102,14 +103,14 @@ function DossierPanel({ influencer, jobId }) {
         </div>
         <div className="dossier-stat">
           <div className="stat-label">ENGAGEMENT</div>
-          <div className="stat-value">{influencer.engagement_rate ? `${influencer.engagement_rate}%` : "—"}</div>
+          <div className="stat-value">{influencer.engagement_rate ? `${influencer.engagement_rate}%` : "N/A"}</div>
         </div>
         <div className="dossier-stat">
           <div className="stat-label">PRICE RANGE</div>
           <div className="stat-value">
-            {influencer.price_low && influencer.price_high
+            {influencer.price_low && influencer.price_high && (influencer.price_low > 0 || influencer.price_high > 0)
               ? `$${fmt(influencer.price_low)}–$${fmt(influencer.price_high)}`
-              : "—"}
+              : "N/A"}
           </div>
           <div className="stat-sub">per post</div>
         </div>
@@ -544,19 +545,19 @@ export default function Dashboard({ jobId, onComplete, onReset, loading, results
           >
             <div>
               <div className="influencer-name">
-                @{inf.handle}
+                @{inf.handle.replace(/^@+/, "")}
                 {inf.competitor_flag && <CompetitorBadge />}
               </div>
               <div className="influencer-platform">{(inf.platform || "").toUpperCase()}</div>
             </div>
             <span className="cell-value">{fmt(inf.followers)}</span>
             <span className="cell-value highlight">
-              {inf.engagement_rate ? `${inf.engagement_rate}%` : "—"}
+              {inf.engagement_rate ? `${inf.engagement_rate}%` : "N/A"}
             </span>
             <span className="cell-value">
-              {inf.price_low && inf.price_high
+              {inf.price_low && inf.price_high && (inf.price_low > 0 || inf.price_high > 0)
                 ? `$${fmt(inf.price_low)}–$${fmt(inf.price_high)}`
-                : "—"}
+                : "N/A"}
             </span>
             <RiskBadge flag={inf.risk_flag} />
             <div className="score-bar">

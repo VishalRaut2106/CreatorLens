@@ -173,7 +173,7 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             return
 
         # Cap to top 1 by followers before audit — saves agent calls
-        profiles = sorted(profiles, key=lambda x: x.get("followers", 0), reverse=True)[:1]
+        profiles = sorted(profiles, key=lambda x: x.get("followers", 0), reverse=True)[:5]
         print(f"[STEP 2] Capped to top {len(profiles)} profile by followers")
 
         # Step 3: Qualify + audit + pricing (parallel batch)
@@ -192,22 +192,29 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
         try:
             scored = await score_influencers(enriched, brief_dict)
 
-            # Merge raw stats back onto scored results
-            enriched_map = {p["handle"]: p for p in enriched}
             for s in scored:
-                raw = enriched_map.get(s.get("handle"), {})
+                s["handle"] = s.get("handle", "").lower().strip().lstrip("@")
+
+            # Merge raw stats back onto scored results
+            enriched_map = {p["handle"].lower().strip().lstrip("@"): p for p in enriched}
+            for s in scored:
+                raw = enriched_map.get(s.get("handle", ""), {})
                 s.setdefault("followers", raw.get("followers", 0))
-                s.setdefault("engagement_rate", raw.get("engagement_rate", 0.0))
+                s.setdefault("engagement_rate", raw.get("engagement_rate", None))
                 s.setdefault("price_low", raw.get("price_low", 0))
                 s.setdefault("price_high", raw.get("price_high", 0))
-                
-                
-                # Graceful fallback for risk_flag if literal None is returned
-                r_flag = raw.get("risk_flag")
-                s.setdefault("risk_flag", r_flag if r_flag else "green")
-                s.setdefault("risk_evidence", raw.get("risk_evidence"))
-                s.setdefault("risk_sources", [])
-                s.setdefault("platform", "instagram")
+                s.setdefault("risk_flag", raw.get("risk_flag", "green"))
+                s.setdefault("risk_evidence", raw.get("risk_evidence", None))
+                s.setdefault("risk_sources", raw.get("risk_sources", []))
+                s.setdefault("competitor_flag", raw.get("competitor_flag", False))
+                s.setdefault("competitor_evidence", raw.get("competitor_evidence", None))
+                # Sanitize platform
+                valid_platforms = {"instagram", "tiktok", "youtube", "twitter"}
+                if s.get("platform", "").lower() not in valid_platforms:
+                    s["platform"] = raw.get("platform", "instagram")
+                # Sanitize risk_flag
+                if s.get("risk_flag") not in ("green", "amber", "red"):
+                    s["risk_flag"] = "green"
 
             print(f"[STEP 4] ✓ Scored {len(scored)} influencers")
             for s in scored[:3]:
