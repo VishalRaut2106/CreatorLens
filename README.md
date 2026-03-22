@@ -16,6 +16,8 @@ Built for the **TinyFish × HackerEarth $2M Pre-Accelerator Hackathon 2026**.
 - **Brand Safety Audit**: Autonomous agents scan Google, Reddit, and Twitter/X to ensure candidates are safe for your brand.
 - **Fair Pricing Engine**: Benchmarks influencer rates against market standards to ensure you don't overpay.
 - **Intelligent Scoring**: Ranks candidates based on engagement quality, brand fit, risk score, and price fairness using Llama 3.2.
+- **Campaign History**: Automatically caches previous pipeline runs and statuses, accessible at any time via a dedicated history dashboard.
+- **AI Outreach Drafting**: Generates context-aware, personalized influencer outreach messages instantly based on performance and niche.
 - **Lightning Fast**: Generates a comprehensive, ranked top-10 dossier of vetted influencers in under 2 minutes.
 
 ---
@@ -145,6 +147,7 @@ Poll this endpoint to check job status (`pending` → `running` → `complete` |
       "followers": 26000000,
       "engagement_rate": 0.58,
       "risk_flag": "green",
+      "risk_sources": [],
       "price_low": 50000,
       "price_high": 150000,
       "composite_score": 87.4,
@@ -153,6 +156,12 @@ Poll this endpoint to check job status (`pending` → `running` → `complete` |
   ]
 }
 ```
+
+### `GET /api/campaigns`
+Fetches a list of the 20 most recent campaign jobs and their statuses from the database.
+
+### `POST /api/outreach/{job_id}/{handle}`
+Generates a concise, personalized outreach message for a specifically analyzed influencer using their stats and the original brand brief.
 
 ---
 
