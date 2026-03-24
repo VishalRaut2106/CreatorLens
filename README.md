@@ -16,9 +16,10 @@ Built for the **TinyFish × HackerEarth $2M Pre-Accelerator Hackathon 2026**.
 - **Brand Safety Audit**: Autonomous agents scan Google, Reddit, and Twitter/X to ensure candidates are safe for your brand.
 - **Fair Pricing Engine**: Benchmarks influencer rates against market standards to ensure you don't overpay.
 - **Intelligent Scoring**: Ranks candidates based on engagement quality, brand fit, risk score, and price fairness using Llama 3.2.
+- **Competitor Intel**: Discover influencers and brand ambassadors already working with competitor brands.
 - **Campaign History**: Automatically caches previous pipeline runs and statuses, accessible at any time via a dedicated history dashboard.
 - **AI Outreach Drafting**: Generates context-aware, personalized influencer outreach messages instantly based on performance and niche.
-- **Lightning Fast**: Generates a comprehensive, ranked top-10 dossier of vetted influencers in under 2 minutes.
+- **Lightning Fast**: Generates a comprehensive, ranked top-5 dossier of vetted influencers in under 2 minutes.
 
 ---
 
@@ -163,6 +164,19 @@ Fetches a list of the 20 most recent campaign jobs and their statuses from the d
 ### `POST /api/outreach/{job_id}/{handle}`
 Generates a concise, personalized outreach message for a specifically analyzed influencer using their stats and the original brand brief.
 
+### `POST /api/competitor-intel`
+Searches for influencers and brand ambassadors who have sponsored partnerships with a specified competitor brand.
+
+**Request Body:**
+```json
+{
+  "competitor_brand": "Gymshark"
+}
+```
+
+### `POST /api/cancel-agents`
+An emergency stop endpoint that cancels all currently active TinyFish agents.
+
 ---
 
 ## 🤖 Agent Pipeline Explained
@@ -175,6 +189,7 @@ Four agent types run in parallel via `asyncio.gather` for maximum temporal effic
 | **Qualification** | Pull engagement stats per profile | Platform profile pages |
 | **Audit** | Brand safety & sentiment check | Google, Reddit, Twitter/X |
 | **Pricing** | Rate benchmarks & estimations | Google Search (live market data) |
+| **Competitor**| Discover competitor partnerships | Google Search (sponsored posts) |
 
 ---
 

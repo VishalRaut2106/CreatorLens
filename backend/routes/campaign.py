@@ -172,15 +172,18 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             update_job_status(job_id, "failed")
             return
 
-        # Cap to top 1 by followers before audit — saves agent calls
-        profiles = sorted(profiles, key=lambda x: x.get("followers", 0), reverse=True)[:5]
-        print(f"[STEP 2] Capped to top {len(profiles)} profile by followers")
-
         # Step 3: Qualify + audit + pricing (parallel batch)
         print(f"\n[STEP 3] Running full audit (qual + audit + pricing)...")
         try:
             enriched = await run_full_audit(profiles)
             print(f"[STEP 3] ✓ Enriched {len(enriched)} profiles")
+
+            # Re-sort by actual followers from qualification agents
+            enriched = sorted(
+                enriched, 
+                key=lambda x: x.get("followers", 0), 
+                reverse=True
+            )[:5]
         except Exception as e:
             print(f"[STEP 3] ✗ FAILED: {e}")
             traceback.print_exc()
