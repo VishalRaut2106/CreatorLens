@@ -72,12 +72,11 @@ async def _ollama_chat(system: str, user: str) -> str:
         return resp.json()["message"]["content"].strip()
 
 
-async def _gemini_chat(system: str, user: str, retries: int = 5) -> str:
+async def _gemini_chat(system: str, user: str, retries: int = 2) -> str:
     """Call Google Gemini API via REST with retry on 429."""
     if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY is not set. Add it to your .env file.")
+        raise ValueError("GEMINI_API_KEY is not set.")
 
-    # Try primary model first, fall back to alternative on persistent 429
     models_to_try = [GEMINI_MODEL, "gemini-1.5-flash-latest", "gemini-1.0-pro"]
 
     for model in models_to_try:
@@ -85,28 +84,24 @@ async def _gemini_chat(system: str, user: str, retries: int = 5) -> str:
         payload = {
             "system_instruction": {"parts": [{"text": system}]},
             "contents": [{"parts": [{"text": user}]}],
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096}
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048}
         }
         for attempt in range(retries):
-            async with httpx.AsyncClient(timeout=120) as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(url, json=payload)
                 if resp.status_code == 429:
-                    wait = 15 * (attempt + 1)
-                    print(f"  [LLM] {model} 429 rate limit, retrying in {wait}s (attempt {attempt+1}/{retries})...")
+                    wait = 5 * (attempt + 1)
+                    print(f"  [LLM] {model} 429, retrying in {wait}s...")
                     await asyncio.sleep(wait)
                     continue
-                if resp.status_code in (200,):
+                if resp.status_code == 200:
                     data = resp.json()
                     return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                # non-429 error, try next model
-                print(f"  [LLM] {model} error {resp.status_code}, trying next model...")
                 break
         else:
-            # all retries exhausted for this model, try next
-            print(f"  [LLM] {model} rate limit exhausted, trying next model...")
             continue
 
-    raise Exception("All Gemini models rate limited. Try again in a minute.")
+    raise Exception("All Gemini models rate limited.")
 
 
 async def _openrouter_chat(system: str, user: str) -> str:
