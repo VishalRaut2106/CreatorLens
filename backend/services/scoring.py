@@ -2,6 +2,7 @@ import httpx
 import json
 import os
 import re
+import asyncio
 
 # ── LLM Provider Config ──────────────────────────────────────
 # Set LLM_PROVIDER to "gemini" (default) or "ollama"
@@ -72,8 +73,8 @@ async def _ollama_chat(system: str, user: str) -> str:
         return resp.json()["message"]["content"].strip()
 
 
-async def _gemini_chat(system: str, user: str) -> str:
-    """Call Google Gemini API via REST."""
+async def _gemini_chat(system: str, user: str, retries: int = 3) -> str:
+    """Call Google Gemini API via REST with retry on 429."""
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not set. Add it to your .env file.")
 
@@ -90,27 +91,23 @@ async def _gemini_chat(system: str, user: str) -> str:
             "maxOutputTokens": 4096
         }
     }
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        # Extract text from Gemini response
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    for attempt in range(retries):
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code == 429:
+                wait = 10 * (attempt + 1)
+                print(f"  [LLM] Gemini 429 rate limit, retrying in {wait}s (attempt {attempt+1}/{retries})...")
+                await asyncio.sleep(wait)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    raise Exception("Gemini rate limit exceeded after retries")
 
 
 async def _llm_chat(system: str, user: str) -> str:
-    """Unified LLM router — uses Gemini by default, falls back to Ollama."""
-    if LLM_PROVIDER == "gemini":
-        try:
-            return await _gemini_chat(system, user)
-        except Exception as e:
-            print(f"  [LLM] Gemini failed: {e}")
-            if OLLAMA_BASE_URL:
-                print(f"  [LLM] Falling back to Ollama...")
-                return await _ollama_chat(system, user)
-            raise
-    else:
-        return await _ollama_chat(system, user)
+    """Unified LLM router — Gemini only with retry."""
+    return await _gemini_chat(system, user)
 
 
 def _parse_json(raw: str):
