@@ -2,6 +2,7 @@ import httpx
 import json
 import os
 import re
+import asyncio
 
 # ── LLM Provider Config ──────────────────────────────────────
 # Set LLM_PROVIDER to "gemini" (default) or "ollama"
@@ -72,84 +73,68 @@ async def _ollama_chat(system: str, user: str) -> str:
         return resp.json()["message"]["content"].strip()
 
 
-async def _gemini_chat(system: str, user: str) -> str:
+async def _gemini_chat(system: str, user: str, retries: int = 5) -> str:
     """Call Google Gemini API via REST with exponential backoff on 429."""
     if not GEMINI_API_KEY or "your_api_key" in GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not set correctly. Add it to your .env file.")
 
-    url = f"{GEMINI_BASE_URL}/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    payload = {
-        "system_instruction": {
-            "parts": [{"text": system}]
-        },
-        "contents": [{
-            "parts": [{"text": user}]
-        }],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 4096
-        }
-    }
+    # Try primary model first, fall back to alternative on persistent 429
+    models_to_try = [GEMINI_MODEL, "gemini-1.5-flash", "gemini-1.5-flash-8b"]
 
     import asyncio
-    max_retries = 3
     base_delay = 2
 
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(url, json=payload)
-                
-                # Handle 429 specifically with backoff
-                if resp.status_code == 429:
-                    if attempt < max_retries - 1:
-                        wait = base_delay * (2 ** attempt)
-                        print(f"  [LLM] Gemini 429 (Rate Limit). Retrying in {wait}s...")
-                        await asyncio.sleep(wait)
-                        continue
-                    else:
-                        resp.raise_for_status()
-                
-                resp.raise_for_status()
-                data = resp.json()
+    for model in models_to_try:
+        url = f"{GEMINI_BASE_URL}/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "system_instruction": {"parts": [{"text": system}]},
+            "contents": [{"parts": [{"text": user}]}],
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096}
+        }
 
-                if not data.get("candidates"):
-                    print(f"  [LLM] Gemini blocked/empty response: {data}")
-                    return ""
-
-                # Extract text safely
-                parts = data["candidates"][0].get("content", {}).get("parts", [])
-                if not parts:
-                    return ""
+        for attempt in range(retries):
+            try:
+                async with httpx.AsyncClient(timeout=120) as client:
+                    resp = await client.post(url, json=payload)
                     
-                return parts[0].get("text", "").strip()
+                    # Handle 429 specifically with backoff
+                    if resp.status_code == 429:
+                        if attempt < retries - 1:
+                            wait = base_delay * (2 ** attempt)
+                            print(f"  [LLM] {model} 429 (Rate Limit). Retrying in {wait}s (attempt {attempt+1}/{retries})...")
+                            await asyncio.sleep(wait)
+                            continue
+                        else:
+                            print(f"  [LLM] {model} rate limit exhausted, trying next model...")
+                            break # Break retry loop to try next model
+                    
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if not data.get("candidates"):
+                            print(f"  [LLM] {model} blocked/empty response: {data}")
+                            return ""
 
-        except httpx.HTTPStatusError as e:
-            if resp.status_code != 429:
-                raise e
-            if attempt == max_retries - 1:
-                raise e
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise e
-            await asyncio.sleep(base_delay)
+                        parts = data["candidates"][0].get("content", {}).get("parts", [])
+                        if not parts:
+                            return ""
+                            
+                        return parts[0].get("text", "").strip()
+                    else:
+                        print(f"  [LLM] {model} error {resp.status_code}, trying next model...")
+                        break # Break retry loop to try next model
 
-    return ""
+            except Exception as e:
+                print(f"  [LLM] {model} request failed: {e}")
+                if attempt < retries - 1:
+                    await asyncio.sleep(base_delay)
+                    continue
+                else: break
 
+    raise Exception("All Gemini models rate limited or failed. Try again in a minute.")
 
 async def _llm_chat(system: str, user: str) -> str:
-    """Unified LLM router — uses Gemini by default, falls back to Ollama."""
-    if LLM_PROVIDER == "gemini":
-        try:
-            return await _gemini_chat(system, user)
-        except Exception as e:
-            print(f"  [LLM] Gemini failed: {e}")
-            if OLLAMA_BASE_URL:
-                print(f"  [LLM] Falling back to Ollama...")
-                return await _ollama_chat(system, user)
-            raise
-    else:
-        return await _ollama_chat(system, user)
+    """Unified LLM router — Gemini only with retry."""
+    return await _gemini_chat(system, user)
 
 
 def _parse_json(raw: str):
