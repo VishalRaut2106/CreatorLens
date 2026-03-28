@@ -121,6 +121,9 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             if brief.keywords:
                 keywords = list(set(keywords + brief.keywords))
             print(f"[STEP 1] ✓ Keywords: {keywords}")
+            
+            if not keywords:
+                print(f"[STEP 1] ⚠ WARNING: Generated 0 keywords. Pipeline may find fewer results.")
         except Exception as e:
             print(f"[STEP 1] ✗ FAILED: {e}")
             traceback.print_exc()

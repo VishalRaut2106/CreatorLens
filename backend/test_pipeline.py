@@ -13,10 +13,10 @@ async def test_ollama():
     from services.scoring import _ollama_chat
     try:
         result = await _ollama_chat("You are helpful.", "Say 'hello' in one word.")
-        print(f"  ✓ Ollama responded: {result[:100]}")
+        print(f"  [OK] Ollama responded: {result[:100]}")
         return True
     except Exception as e:
-        print(f"  ✗ Ollama FAILED: {e}")
+        print(f"  [FAIL] Ollama FAILED: {e}")
         print(f"  → Is 'ollama serve' running? Is the model pulled?")
         return False
 
@@ -25,7 +25,7 @@ async def test_tinyfish_api():
     print("\n[TEST] TinyFish API connectivity...")
     key = os.getenv("TINYFISH_API_KEY")
     if not key:
-        print(f"  ✗ TINYFISH_API_KEY is not set!")
+        print(f"  [FAIL] TINYFISH_API_KEY is not set!")
         return False
     print(f"  Key loaded: {key[:20]}...")
 
@@ -36,10 +36,10 @@ async def test_tinyfish_api():
             goal="What is the page title? Return JSON: {\"title\": str}",
             stealth=False
         )
-        print(f"  ✓ TinyFish responded: {result}")
+        print(f"  [OK] TinyFish responded: {result}")
         return True
     except Exception as e:
-        print(f"  ✗ TinyFish FAILED: {e}")
+        print(f"  [FAIL] TinyFish FAILED: {e}")
         return False
 
 async def test_keyword_expansion():
@@ -49,10 +49,10 @@ async def test_keyword_expansion():
     brief = {"niche": "fitness", "target_audience": "men 18-35"}
     try:
         keywords = await expand_keywords(brief)
-        print(f"  ✓ Keywords: {keywords}")
+        print(f"  [OK] Keywords: {keywords}")
         return True
     except Exception as e:
-        print(f"  ✗ FAILED: {e}")
+        print(f"  [FAIL] FAILED: {e}")
         return False
 
 async def main():
@@ -65,7 +65,7 @@ async def main():
     key = os.getenv("TINYFISH_API_KEY")
     ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     model = os.getenv("OLLAMA_MODEL", "llama3.2")
-    print(f"  TINYFISH_API_KEY: {'✓ set' if key else '✗ NOT SET'}")
+    print(f"  TINYFISH_API_KEY: {'[OK] set' if key else '[FAIL] NOT SET'}")
     print(f"  OLLAMA_BASE_URL: {ollama_url}")
     print(f"  OLLAMA_MODEL: {model}")
 
@@ -81,8 +81,8 @@ async def main():
 
     print(f"\n{'='*60}")
     print(f"Summary:")
-    print(f"  Ollama:   {'✓ PASS' if ollama_ok else '✗ FAIL'}")
-    print(f"  TinyFish: {'✓ PASS' if tinyfish_ok else '✗ FAIL'}")
+    print(f"  Ollama:   {'[OK] PASS' if ollama_ok else '[FAIL] FAIL'}")
+    print(f"  TinyFish: {'[OK] PASS' if tinyfish_ok else '[FAIL] FAIL'}")
     print(f"{'='*60}")
 
 if __name__ == "__main__":

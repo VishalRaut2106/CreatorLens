@@ -73,9 +73,9 @@ async def _ollama_chat(system: str, user: str) -> str:
 
 
 async def _gemini_chat(system: str, user: str) -> str:
-    """Call Google Gemini API via REST."""
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY is not set. Add it to your .env file.")
+    """Call Google Gemini API via REST with exponential backoff on 429."""
+    if not GEMINI_API_KEY or "your_api_key" in GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is not set correctly. Add it to your .env file.")
 
     url = f"{GEMINI_BASE_URL}/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     payload = {
@@ -90,12 +90,51 @@ async def _gemini_chat(system: str, user: str) -> str:
             "maxOutputTokens": 4096
         }
     }
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        # Extract text from Gemini response
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+    import asyncio
+    max_retries = 3
+    base_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(url, json=payload)
+                
+                # Handle 429 specifically with backoff
+                if resp.status_code == 429:
+                    if attempt < max_retries - 1:
+                        wait = base_delay * (2 ** attempt)
+                        print(f"  [LLM] Gemini 429 (Rate Limit). Retrying in {wait}s...")
+                        await asyncio.sleep(wait)
+                        continue
+                    else:
+                        resp.raise_for_status()
+                
+                resp.raise_for_status()
+                data = resp.json()
+
+                if not data.get("candidates"):
+                    print(f"  [LLM] Gemini blocked/empty response: {data}")
+                    return ""
+
+                # Extract text safely
+                parts = data["candidates"][0].get("content", {}).get("parts", [])
+                if not parts:
+                    return ""
+                    
+                return parts[0].get("text", "").strip()
+
+        except httpx.HTTPStatusError as e:
+            if resp.status_code != 429:
+                raise e
+            if attempt == max_retries - 1:
+                raise e
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise e
+            await asyncio.sleep(base_delay)
+
+    return ""
 
 
 async def _llm_chat(system: str, user: str) -> str:
@@ -114,17 +153,39 @@ async def _llm_chat(system: str, user: str) -> str:
 
 
 def _parse_json(raw: str):
+    """Parse JSON from LLM response, handling common issues like markdown blocks or chatty text."""
+    if not raw:
+        return []
+
+    # 1. Try direct parse
     try:
         return json.loads(raw, strict=False)
     except json.JSONDecodeError:
         pass
-    clean = raw.replace("```json", "").replace("```", "").strip()
-    try:
-        return json.loads(clean, strict=False)
-    except json.JSONDecodeError:
-        pass
-    clean = re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f]', '', clean)
-    return json.loads(clean, strict=False)
+
+    # 2. Extract content between first [ or { and last ] or }
+    import re
+    # Match for array or object
+    pattern = re.compile(r'(\[.*\]|\{.*\})', re.DOTALL)
+    match = pattern.search(raw)
+    
+    if match:
+        clean = match.group(1)
+        # Remove potential markdown debris
+        clean = clean.replace("```json", "").replace("```", "").strip()
+        try:
+            return json.loads(clean, strict=False)
+        except json.JSONDecodeError:
+            # Last ditch: remove control characters
+            clean = re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f]', '', clean)
+            try:
+                return json.loads(clean, strict=False)
+            except json.JSONDecodeError:
+                pass
+
+    # 3. Last fallback: return empty structure (usually keyword expansion expects a list)
+    print(f"  [LLM] FAILED TO PARSE JSON: {raw[:200]}...")
+    return []
 
 
 def pre_filter_score(p):
