@@ -19,40 +19,47 @@ def _get_headers():
 # -----------------------------------------------------------
 # Core: single agent call (SSE streaming → wait for COMPLETE)
 # -----------------------------------------------------------
-async def run_agent(url: str, goal: str, stealth: bool = False) -> dict:
+async def run_agent(url: str, goal: str, stealth: bool = False, retries: int = 2) -> dict:
     payload = {
         "url": url,
         "goal": goal,
         "browser_profile": "stealth" if stealth else "lite"
     }
 
-    async with httpx.AsyncClient(timeout=180 if stealth else 90) as client:
-        async with client.stream("POST", TINYFISH_URL, headers=_get_headers(), json=payload) as resp:
-            resp.raise_for_status()
-            current_run_id = None
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                event = json.loads(line[6:])
+    for attempt in range(retries):
+        try:
+            async with httpx.AsyncClient(timeout=180 if stealth else 90) as client:
+                async with client.stream("POST", TINYFISH_URL, headers=_get_headers(), json=payload) as resp:
+                    resp.raise_for_status()
+                    current_run_id = None
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        event = json.loads(line[6:])
 
-                # Track run_id when agent starts
-                if event.get("type") == "STARTED":
-                    current_run_id = event.get("run_id")
-                    if current_run_id:
-                        active_runs.append(current_run_id)
-                        print(f"  [AGENT FIRED] {current_run_id} -> {url}")
+                        # Track run_id when agent starts
+                        if event.get("type") == "STARTED":
+                            current_run_id = event.get("run_id")
+                            if current_run_id:
+                                active_runs.append(current_run_id)
+                                print(f"  [AGENT FIRED] {current_run_id} -> {url}")
 
-                if event.get("type") == "COMPLETE":
-                    if current_run_id and current_run_id in active_runs:
-                        active_runs.remove(current_run_id)
-                    
-                    result = event.get("result", {})
-                    if isinstance(result, str):
-                        try:
-                            result = json.loads(result)
-                        except Exception:
-                            result = {}
-                    return result if isinstance(result, (dict, list)) else {}
+                        if event.get("type") == "COMPLETE":
+                            if current_run_id and current_run_id in active_runs:
+                                active_runs.remove(current_run_id)
+                            
+                            result = event.get("result", {})
+                            if isinstance(result, str):
+                                try:
+                                    result = json.loads(result)
+                                except Exception:
+                                    result = {}
+                            return result if isinstance(result, (dict, list)) else {}
+            return {}
+        except Exception as e:
+            print(f"  [AGENT RETRY] Attempt {attempt + 1}/{retries} failed for {url}: {e}")
+            if attempt < retries - 1:
+                await asyncio.sleep(2)
     return {}
 
 
@@ -61,7 +68,7 @@ async def run_agent(url: str, goal: str, stealth: bool = False) -> dict:
 # -----------------------------------------------------------
 async def discover_influencers(keywords: List[str], platforms: List[str]) -> List[dict]:
     PLATFORM_URLS = {
-        "instagram": "https://www.instagram.com/explore/tags/{keyword}/",
+        "instagram": "https://www.google.com/search?q={keyword}+influencer+instagram+followers",
         "twitter":   "https://x.com/search?q={keyword}&src=typed_query",
         "youtube":   "https://www.youtube.com/results?search_query={keyword}+influencer"
     }
@@ -130,6 +137,17 @@ async def qualify_profile(profile: dict) -> dict:
         f'Never return null — always return a number even if approximate.'
     )
     result = await run_agent(url, goal, stealth=True)
+
+    # Fallback estimation from followers when agent can't scrape
+    followers = profile.get("followers", 0)
+    if not result.get("engagement_rate"):
+        if platform == "youtube":
+            rate = 1.5 if followers > 1_000_000 else 2.5
+        else:
+            rate = 1.2 if followers > 1_000_000 else 2.8
+        result["engagement_rate"] = round(rate, 2)
+        result["engagement_estimated"] = True
+
     return {"handle": profile["handle"], "platform": profile["platform"], **result}
 
 
@@ -140,16 +158,14 @@ async def audit_profile(profile: dict) -> dict:
     handle = profile["handle"]
     url = f"https://www.google.com/search?q={handle}+influencer+controversy+scandal"
     goal = (
-        f'Search for any controversy, scandal, or brand risk associated with "{handle}". '
-        f'Look at the actual search results and news articles on the page. '
-        f'Return ONLY a raw JSON object, no markdown, no explanation. '
-        f'Format: {{'
-        f'"handle": "{handle}", '
-        f'"risk_flag": "green or amber or red based on findings", '
-        f'"risk_evidence": "detailed summary of findings or null if none", '
-        f'"risk_sources": ["paste the actual URLs of the news articles or pages you found as evidence"]'
-        f'}}'
-        f'If no controversy found, return risk_flag as green and risk_sources as empty array [].'
+        f'Search Google for "{handle} controversy scandal" and read the TOP 3 results carefully. '
+        f'ONLY flag as red/amber if there is DIRECT evidence of: hate speech, fraud, abuse, '
+        f'criminal activity, or major brand boycott involving THIS specific person. '
+        f'General negative YouTube comments or mild criticism = green. '
+        f'A tech channel covering controversial topics ≠ controversial creator. '
+        f'Return ONLY raw JSON: {{"handle": "{handle}", "risk_flag": "green/amber/red", '
+        f'"risk_evidence": "specific finding or null", "risk_sources": []}} '
+        f'When in doubt, return green.'
     )
     result = await run_agent(url, goal, stealth=False)
     return {"handle": handle, "platform": profile["platform"], **result}
@@ -170,13 +186,29 @@ async def price_profile(profile: dict) -> dict:
         f'Always return numbers — estimate if exact data not found.'
     )
     result = await run_agent(url, goal)
+
+    # Fallback pricing tiers when agent can't scrape
+    if not result.get("price_low"):
+        followers = profile.get("followers", 0)
+        tiers = {
+            "youtube":   [(10_000_000, 50000, 150000), (1_000_000, 10000, 50000), (0, 1000, 10000)],
+            "instagram": [(10_000_000, 20000, 80000),  (1_000_000, 5000, 20000),  (0, 500, 5000)],
+            "twitter":   [(10_000_000, 15000, 50000),  (1_000_000, 3000, 15000),  (0, 300, 3000)],
+        }
+        for threshold, low, high in tiers.get(platform, tiers["instagram"]):
+            if followers >= threshold:
+                result["price_low"] = low
+                result["price_high"] = high
+                result["price_estimated"] = True
+                break
+
     return {"handle": handle, "platform": platform, **result}
 
 
 # -----------------------------------------------------------
 # Step 2: Full parallel audit (qual + audit + pricing)
 # -----------------------------------------------------------
-async def run_full_audit(profiles: List[dict]) -> List[dict]:
+async def run_full_audit(profiles: List[dict], brief_dict: dict = None) -> List[dict]:
     qual_tasks    = [qualify_profile(p) for p in profiles]
     audit_tasks   = [audit_profile(p)   for p in profiles]
     pricing_tasks = [price_profile(p)   for p in profiles]
@@ -205,12 +237,58 @@ async def run_full_audit(profiles: List[dict]) -> List[dict]:
     audit_map   = to_map(audit_results)
     pricing_map = to_map(pricing_results)
 
+    # After qual_map is built, apply hard disqualifiers
+    def passes_hard_filter(profile, qual_data):
+        engagement_rate = qual_data.get("engagement_rate", 0)
+        # Convert to float safely
+        if not isinstance(engagement_rate, (int, float)):
+            try:
+                engagement_rate = float(engagement_rate)
+            except (ValueError, TypeError):
+                engagement_rate = 0
+                
+        followers = qual_data.get("followers", 0)
+        if not isinstance(followers, (int, float)):
+            try:
+                followers = int(followers)
+            except (ValueError, TypeError):
+                followers = 0
+
+        # Hard disqualifier 1: engagement too low
+        if engagement_rate > 0 and engagement_rate < 0.1:  # only drop obvious bots
+            print(f"  [FILTER] ✗ {profile['handle']} — engagement too low ({engagement_rate}%)")
+            return False
+
+        # Hard disqualifier 2: follower count mismatch
+        # Discovery said 2M but qual says 27K — trust qual data
+        discovery_followers = profile.get("followers", 0)
+        if not isinstance(discovery_followers, (int, float)):
+            try:
+                discovery_followers = int(discovery_followers)
+            except (ValueError, TypeError):
+                discovery_followers = 0
+                
+        if followers > 0 and discovery_followers > 0:
+            ratio = max(discovery_followers, followers) / min(discovery_followers, followers)
+            if ratio > 10:
+                print(f"  [FILTER] ⚠ {profile['handle']} — follower count mismatch ({discovery_followers:,} vs {followers:,})")
+                # Update with real data but don't disqualify
+                profile["followers"] = followers
+                profile["followers_verified"] = True
+
+        return True
+
     enriched = []
     for profile in profiles:
         handle = profile["handle"]
+        qual_data = qual_map.get(handle, {})
+        
+        if not passes_hard_filter(profile, qual_data):
+            continue
+
         merged = {
             **profile,
-            **qual_map.get(handle, {}),
+            **qual_data,
             **audit_map.get(handle, {}),
             **pricing_map.get(handle, {})
         }

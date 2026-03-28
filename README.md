@@ -25,7 +25,12 @@ Built for the **TinyFish × HackerEarth $2M Pre-Accelerator Hackathon 2026**.
 
 ## 🏗️ Architecture & Tech Stack
 
-**The Pipeline:** Brand Brief → Parallel TinyFish Agents → LLM Scoring → Ranked Dossier
+<div align="center">
+  <img src="docs/architecture.png" alt="CreatorLens Architecture Diagram" width="800"/>
+  <p><i>High-level system architecture</i></p>
+</div>
+
+### Tech Stack
 
 | Component | Technology |
 |---|---|
@@ -34,6 +39,136 @@ Built for the **TinyFish × HackerEarth $2M Pre-Accelerator Hackathon 2026**.
 | **Agent Infrastructure** | TinyFish API (Parallel Browser Agents) |
 | **LLM Engine** | Ollama (Llama 3.2, running locally) |
 | **Database** | SQLite (Production-ready for Postgres migration) |
+
+### Project Structure
+
+```
+CreatorLens/
+├── backend/
+│   ├── main.py                  # FastAPI app entry point, CORS, router registration
+│   ├── routes/
+│   │   └── campaign.py          # All API endpoints + background pipeline orchestrator
+│   ├── services/
+│   │   ├── tinyfish.py          # TinyFish browser agent calls (discovery, audit, pricing)
+│   │   └── scoring.py           # Ollama LLM integration (scoring, keyword expansion, outreach)
+│   ├── models/
+│   │   └── schemas.py           # Pydantic request/response models (BrandBrief, InfluencerDossier)
+│   ├── db/
+│   │   └── database.py          # SQLite database init, CRUD operations
+│   └── creatorlens.db           # SQLite database file
+├── frontend/
+│   └── src/
+│       ├── App.jsx              # Root component, screen routing (form → loading → results)
+│       ├── App.css              # Global styles & design system
+│       └── components/
+│           ├── BriefForm.jsx    # Brand brief input form
+│           ├── Dashboard.jsx    # Results dashboard with dossier cards, polling, outreach
+│           └── CampaignHistory.jsx  # Past campaign history viewer
+└── docker-compose.yml           # Container orchestration for deployment
+```
+
+### System Components
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  FRONTEND (React + Vite)       http://localhost:5173                 │
+│  ┌─────────────┐ ┌──────────────────┐ ┌───────────────────────┐     │
+│  │  BriefForm   │ │    Dashboard     │ │  CampaignHistory      │     │
+│  │ (Submit Brief)│ │ (Polling + Cards)│ │ (Past Campaigns)      │     │
+│  └──────┬───────┘ └────────┬─────────┘ └──────────┬────────────┘     │
+│         │  POST /run-campaign  GET /status/:id     │ GET /campaigns  │
+└─────────┼──────────────────┼──────────────────────┼─────────────────┘
+          │    REST API      │                      │
+┌─────────▼──────────────────▼──────────────────────▼─────────────────┐
+│  BACKEND (FastAPI)             http://localhost:8000                 │
+│  ┌──────────────────────────────────────────────────────────┐       │
+│  │  Routes (campaign.py)                                     │       │
+│  │  • POST /api/run-campaign    → launch background pipeline │       │
+│  │  • GET  /api/status/:id      → poll job status + results  │       │
+│  │  • GET  /api/campaigns       → list campaign history      │       │
+│  │  • POST /api/outreach/:id/:h → generate outreach message  │       │
+│  │  • POST /api/competitor-intel→ find competitor influencers │       │
+│  │  • POST /api/cancel-agents   → emergency stop all agents  │       │
+│  └──────────────────────────────────────────────────────────┘       │
+│                              │                                      │
+│  ┌───────────────────────────▼──────────────────────────────┐       │
+│  │  Background Pipeline (execute_pipeline)                   │       │
+│  │  Step 1 → Step 2 → Step 2b → Step 3 → Step 4 → Step 5   │       │
+│  └──────────────────────────────────────────────────────────┘       │
+│         │                    │                    │                  │
+│  ┌──────▼───────┐  ┌────────▼────────┐  ┌───────▼────────┐         │
+│  │  scoring.py   │  │  tinyfish.py    │  │  database.py   │         │
+│  │  (Ollama LLM) │  │  (Browser Agents│  │  (SQLite CRUD) │         │
+│  └──────┬────────┘  └────────┬────────┘  └───────┬────────┘         │
+└─────────┼────────────────────┼────────────────────┼─────────────────┘
+          │                    │                    │
+  ┌───────▼────────┐  ┌───────▼─────────────┐  ┌──▼──────────┐
+  │  Ollama         │  │ TinyFish API         │  │  SQLite DB  │
+  │  (Llama 3.2)    │  │ (Parallel Browsers)  │  │             │
+  │  localhost:11434 │  │  → Instagram         │  └─────────────┘
+  └─────────────────┘  │  → YouTube           │
+                       │  → Twitter/X         │
+                       │  → Google            │
+                       │  → Reddit            │
+                       └──────────────────────┘
+```
+
+### Pipeline Data Flow
+
+The core pipeline runs as a **background task** after a brand brief is submitted:
+
+```
+Brand Brief
+    │
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 1: Keyword Expansion (Ollama)                           │
+│ LLM generates 5-8 search keywords from the brief            │
+└──────────────────────┬───────────────────────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 2: Discovery (TinyFish Agents)                          │
+│ Parallel browser agents search Instagram, YouTube, Twitter   │
+│ for influencer profiles matching keywords                    │
+│                                                              │
+│ + Optional: Competitor Intel agents run in parallel           │
+└──────────────────────┬───────────────────────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 2b: Pre-Filter Scoring (Local)                          │
+│ Heuristic filter: follower floor (5K), spam handle detection,│
+│ platform weighting, fake-follower signals → Top 10 selected  │
+└──────────────────────┬───────────────────────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 3: Full Audit (TinyFish — 3 agents per profile)         │
+│ For each of the top 10 profiles, fires 3 agents in parallel: │
+│   • Qualification → engagement stats from profile pages      │
+│   • Brand Safety  → controversy scan via Google/Reddit/X     │
+│   • Pricing       → market rate benchmarks via Google         │
+│                                                              │
+│ Hard filters applied: min engagement rate, follower mismatch │
+│ Post-audit re-ranking by engagement + risk + price fit       │
+└──────────────────────┬───────────────────────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 4: LLM Scoring & Summarization (Ollama)                 │
+│ Llama 3.2 scores each candidate on 4 weighted dimensions:    │
+│   • Engagement Quality (40%)                                 │
+│   • Audience Authenticity (30%)                              │
+│   • Niche Relevance (20%)                                    │
+│   • Brand Safety (10%)                                       │
+│ Generates AI summary + composite score per influencer        │
+└──────────────────────┬───────────────────────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Step 5: Persist Results (SQLite)                             │
+│ Ranked dossiers saved to DB, job marked complete             │
+└──────────────────────┬───────────────────────────────────────┘
+                       ▼
+              Ranked Influencer Dossier
+              (Dashboard renders results)
+```
 
 ---
 

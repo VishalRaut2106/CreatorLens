@@ -7,28 +7,37 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 
 SCORING_SYSTEM_PROMPT = """
-You are an influencer marketing analyst. Score each influencer candidate based on available data.
+You are an influencer marketing analyst. Score each candidate on:
 
-CRITICAL: Only score the exact influencers provided in the candidate data. 
-Do NOT add, invent, or include any influencers not in the input list.
-Return ONLY the influencers from the provided data.
+1. Engagement Quality (40%) 
+   - engagement_rate vs platform benchmarks
+   - Instagram benchmark: >2% excellent, 1-2% good, 0.5-1% average, <0.5% poor
+   - YouTube benchmark: >1% excellent, 0.5-1% good, <0.3% poor
 
+2. Audience Authenticity (30%)
+   - Does follower count match engagement numbers?
+   - High followers + very low engagement = suspicious
+   - Flag if engagement_rate < 0.3% regardless of followers
+
+3. Niche Relevance (20%)
+   - How well does their handle/summary match the brand brief niche?
+   - Score 0-100 based on content alignment
+
+4. Brand Safety (10%)
+   - green = 100, amber = 50, red = 0
+
+composite_score = (engagement * 0.4) + (authenticity * 0.3) + (relevance * 0.2) + (safety * 0.1)
+
+CRITICAL: Only score influencers from the provided list.
 Return ONLY a valid JSON array. No markdown, no explanation, no backticks.
 
 Each object must have:
 - handle (string)
 - platform (string)
 - composite_score (float 0-100)
-- score_breakdown (object with: engagement_quality, brand_fit, risk_score, price_fairness — each 0-100)
+- score_breakdown (object with: engagement, authenticity, relevance, safety — each 0-100)
 - ai_summary (string, 2-3 sentences, professional tone mentioning their niche relevance)
 - risk_flag (string: "green", "amber", or "red")
-
-Scoring rules:
-- engagement_quality: use engagement_rate if available. If missing, estimate from follower count (larger accounts typically have lower engagement). Weight: 35%
-- brand_fit: score based on how well the handle/niche matches the brand brief. Weight: 30%
-- risk_score: 100 = no risk, 0 = high risk. Use risk_flag if provided, otherwise default to 80. Weight: 25%
-- price_fairness: compare price range to budget. If price data missing, score 50. Weight: 10%
-- composite_score = (engagement_quality * 0.35) + (brand_fit * 0.30) + (risk_score * 0.25) + (price_fairness * 0.10)
 
 IMPORTANT: Every candidate must get a DIFFERENT composite_score. Do not give identical scores.
 """
@@ -61,6 +70,123 @@ def _parse_json(raw: str):
         pass
     clean = re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f]', '', clean)
     return json.loads(clean, strict=False)
+
+
+def pre_filter_score(p):
+    followers = p.get("followers", 0)
+    # The dictionary might have actual string values or numbers or be missing
+    if not isinstance(followers, (int, float)):
+        try:
+            followers = int(followers)
+        except (ValueError, TypeError):
+            followers = 0
+            
+    handle = p.get("handle", "")
+    platform = p.get("platform", "")
+    profile_url = p.get("profile_url", "")
+
+    if followers < 5000:
+        return 0  # hard disqualifier — not influential
+
+    score = 0
+
+    # ── Platform-weighted reach ───────────────────────────
+    platform_weight = {
+        "youtube": 1.5,   # hardest to game
+        "twitter": 1.3,
+        "instagram": 1.0,
+        "tiktok": 0.8     # easiest to inflate
+    }
+    score += followers * platform_weight.get(platform, 1.0)
+
+    # ── Fake follower signal ──────────────────────────────
+    # Perfectly round numbers = likely inflated
+    if followers % 1000000 == 0: score *= 0.7
+    elif followers % 100000 == 0: score *= 0.85
+    elif followers % 10000 == 0:  score *= 0.92
+
+    # ── Handle authenticity ───────────────────────────────
+    spam_signals = ["follow", "f4f", "promo", "viral",
+                    "trending", "repost", "explore", "official123"]
+    if any(s in handle.lower() for s in spam_signals):
+        return 0  # hard disqualifier
+
+    # Reward real-name style handles
+    if len(handle) >= 4 and not handle.replace("_","").isdigit():
+        score *= 1.1
+
+    # ── Has valid profile URL ─────────────────────────────
+    if not profile_url:
+        score *= 0.7
+
+    return score
+
+
+# -----------------------------------------------------------
+# Fallback estimator for missing agent data
+# -----------------------------------------------------------
+def fill_missing_estimates(profiles: list) -> list:
+    """
+    When TinyFish qualification or pricing agents fail (timeout,
+    blocked, etc.), fill in reasonable estimates so the dashboard
+    doesn't show N/A everywhere.
+    """
+
+    # Industry-average engagement rates by platform
+    AVG_ENGAGEMENT = {
+        "instagram": 1.5,
+        "youtube":   0.5,
+        "twitter":   0.5,
+        "tiktok":    3.0,
+    }
+
+    # Rough CPP (cost-per-post) rates per 1K followers by platform
+    # Returns (low_multiplier, high_multiplier) per 1K followers
+    CPP_PER_1K = {
+        "instagram": (8,  15),   # $8-15 per 1K followers
+        "youtube":   (15, 30),   # $15-30 per 1K followers
+        "twitter":   (3,  8),    # $3-8 per 1K followers
+        "tiktok":    (5,  12),   # $5-12 per 1K followers
+    }
+
+    for p in profiles:
+        platform = (p.get("platform") or "instagram").lower()
+        followers = p.get("followers", 0)
+        if not isinstance(followers, (int, float)):
+            try:
+                followers = int(followers)
+            except (ValueError, TypeError):
+                followers = 0
+
+        # ── Fill engagement_rate ─────────────────────────────
+        eng = p.get("engagement_rate")
+        if eng is None or eng == 0 or eng == "N/A":
+            avg = AVG_ENGAGEMENT.get(platform, 1.0)
+            # Larger accounts tend to have lower engagement
+            if followers > 5_000_000:
+                est = round(avg * 0.4, 2)
+            elif followers > 1_000_000:
+                est = round(avg * 0.6, 2)
+            elif followers > 500_000:
+                est = round(avg * 0.8, 2)
+            else:
+                est = round(avg, 2)
+            p["engagement_rate"] = est
+            p["engagement_estimated"] = True
+            print(f"  [ESTIMATE] {p.get('handle')} engagement → {est}% (estimated)")
+
+        # ── Fill pricing ─────────────────────────────────────
+        price_low  = p.get("price_low", 0) or 0
+        price_high = p.get("price_high", 0) or 0
+        if price_low == 0 and price_high == 0 and followers > 0:
+            low_mult, high_mult = CPP_PER_1K.get(platform, (8, 15))
+            k = followers / 1000
+            p["price_low"]  = int(k * low_mult)
+            p["price_high"] = int(k * high_mult)
+            p["price_estimated"] = True
+            print(f"  [ESTIMATE] {p.get('handle')} pricing → ${p['price_low']:,}–${p['price_high']:,} (estimated)")
+
+    return profiles
 
 
 async def score_influencers(enriched_profiles: list, brand_brief: dict) -> list:
@@ -97,10 +223,10 @@ Return the JSON array.
                     "risk_flag": p.get("risk_flag", "green"),
                     "ai_summary": f"{p.get('handle')} is a candidate in the {brand_brief.get('niche')} niche.",
                     "score_breakdown": {
-                        "engagement_quality": 50,
-                        "brand_fit": 50,
-                        "risk_score": 80,
-                        "price_fairness": 50
+                        "engagement": 50,
+                        "authenticity": 50,
+                        "relevance": 50,
+                        "safety": 80
                     }
                 })
 

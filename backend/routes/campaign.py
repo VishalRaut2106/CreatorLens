@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from models.schemas import BrandBrief, CampaignResponse, JobStatus
 from db.database import create_job, update_job_status, save_results, get_job, get_conn
 from services.tinyfish import discover_influencers, run_full_audit, cancel_all_runs, active_runs, find_competitor_influencers
-from services.scoring import score_influencers, expand_keywords, draft_outreach
+from services.scoring import score_influencers, expand_keywords, draft_outreach, pre_filter_score, fill_missing_estimates
 import uuid
 import json
 import traceback
@@ -159,7 +159,7 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
                 profiles = await profiles_task
 
             print(f"[STEP 2] ✓ Found {len(profiles)} profiles")
-            for p in profiles[:5]:
+            for p in profiles[:10]:
                 print(f"  - {p.get('handle')} ({p.get('platform')})")
         except Exception as e:
             print(f"[STEP 2] ✗ FAILED: {e}")
@@ -172,10 +172,29 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             update_job_status(job_id, "failed")
             return
 
+        # Pre-filter and cap to top 5 to save agent calls
+        print(f"\n[STEP 2b] Pre-filtering discovered profiles...")
+        valid_profiles = []
+        for p in profiles:
+            score = pre_filter_score(p)
+            if score > 0:
+                p["_pre_score"] = score
+                valid_profiles.append(p)
+
+        valid_profiles.sort(key=lambda x: x.get("_pre_score", 0), reverse=True)
+        profiles = valid_profiles[:5]
+        
+        if not profiles:
+            print(f"[STEP 2b] ✗ No valid profiles passed pre-filter — marking job as failed")
+            update_job_status(job_id, "failed")
+            return
+            
+        print(f"[STEP 2b] ✓ Passed {len(profiles)} profiles for deep audit")
+
         # Step 3: Qualify + audit + pricing (parallel batch)
         print(f"\n[STEP 3] Running full audit (qual + audit + pricing)...")
         try:
-            enriched = await run_full_audit(profiles)
+            enriched = await run_full_audit(profiles, brief_dict)
             print(f"[STEP 3] ✓ Enriched {len(enriched)} profiles")
 
             # Re-sort by actual followers from qualification agents
@@ -184,11 +203,35 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
                 key=lambda x: x.get("followers", 0), 
                 reverse=True
             )[:5]
+
+            def post_audit_score(p):
+                score = 0
+                engagement = p.get("engagement_rate") or 0
+                score += engagement * 10
+                risk = p.get("risk_flag", "green")
+                if risk == "red":    score -= 50
+                elif risk == "amber": score -= 10
+                else:                score += 20
+                price_high = p.get("price_high") or 0
+                budget_max = brief_dict.get("budget_max", 5000)
+                if 0 < price_high <= budget_max: score += 30
+                elif price_high > budget_max:    score -= 20
+                return score
+
+            enriched = sorted(enriched, key=post_audit_score, reverse=True)
+            print(f"[STEP 3] Re-ranked by audit quality (engagement + risk + price)")
+            for e in enriched[:10]:
+                print(f"  - {e.get('handle')}: engagement={e.get('engagement_rate')}% risk={e.get('risk_flag')}")
         except Exception as e:
             print(f"[STEP 3] ✗ FAILED: {e}")
             traceback.print_exc()
             update_job_status(job_id, "failed")
             return
+
+        # Step 3b: Fill missing estimates for failed agents
+        print(f"\n[STEP 3b] Filling missing agent data with estimates...")
+        enriched = fill_missing_estimates(enriched)
+        print(f"[STEP 3b] ✓ Estimates filled")
 
         # Step 4: Ollama scoring + summarization
         print(f"\n[STEP 4] Scoring via Ollama...")
@@ -211,6 +254,8 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
                 s.setdefault("risk_sources", raw.get("risk_sources", []))
                 s.setdefault("competitor_flag", raw.get("competitor_flag", False))
                 s.setdefault("competitor_evidence", raw.get("competitor_evidence", None))
+                s.setdefault("engagement_estimated", raw.get("engagement_estimated", False))
+                s.setdefault("price_estimated", raw.get("price_estimated", False))
                 # Sanitize platform
                 valid_platforms = {"instagram", "tiktok", "youtube", "twitter"}
                 if s.get("platform", "").lower() not in valid_platforms:
@@ -220,7 +265,7 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
                     s["risk_flag"] = "green"
 
             print(f"[STEP 4] ✓ Scored {len(scored)} influencers")
-            for s in scored[:3]:
+            for s in scored[:10]:
                 print(f"  - {s.get('handle')}: score={s.get('composite_score')}")
         except Exception as e:
             print(f"[STEP 4] ✗ FAILED: {e}")
@@ -231,7 +276,7 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
         # Step 5: Save to DB
         print(f"\n[STEP 5] Saving results to DB...")
         try:
-            save_results(job_id, scored)
+            save_results(job_id, scored[:5])
             update_job_status(job_id, "complete")
             print(f"[STEP 5] ✓ Saved. Job COMPLETE.")
         except Exception as e:

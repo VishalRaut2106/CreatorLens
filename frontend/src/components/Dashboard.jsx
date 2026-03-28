@@ -41,6 +41,24 @@ function CompetitorBadge() {
   )
 }
 
+function EstBadge() {
+  return (
+    <span style={{
+      fontSize: "8px",
+      letterSpacing: "0.1em",
+      padding: "1px 5px",
+      background: "rgba(255,255,255,0.05)",
+      color: "var(--text-dim)",
+      border: "1px solid var(--border)",
+      fontWeight: 500,
+      marginLeft: 4,
+      verticalAlign: "middle"
+    }}>
+      ~est
+    </span>
+  )
+}
+
 function RiskBadge({ flag }) {
   const config = {
     red:   { label: "🚨 RED FLAG", cls: "red" },
@@ -73,10 +91,10 @@ function DossierPanel({ influencer, jobId }) {
   }
 
   const breakdown = [
-    { label: "ENGAGEMENT", key: "engagement_quality" },
-    { label: "BRAND FIT", key: "brand_fit" },
-    { label: "RISK SCORE", key: "risk_score" },
-    { label: "PRICE FIT", key: "price_fairness" },
+    { label: "ENGAGEMENT",    key: "engagement" },
+    { label: "AUTHENTICITY",  key: "authenticity" },
+    { label: "RELEVANCE",     key: "relevance" },
+    { label: "SAFETY",        key: "safety" },
   ]
 
   return (
@@ -103,13 +121,16 @@ function DossierPanel({ influencer, jobId }) {
         </div>
         <div className="dossier-stat">
           <div className="stat-label">ENGAGEMENT</div>
-          <div className="stat-value">{influencer.engagement_rate ? `${influencer.engagement_rate}%` : "N/A"}</div>
+          <div className="stat-value">
+            {influencer.engagement_rate ? `${influencer.engagement_rate}%` : "N/A"}
+            {influencer.engagement_estimated && <EstBadge />}
+          </div>
         </div>
         <div className="dossier-stat">
           <div className="stat-label">PRICE RANGE</div>
           <div className="stat-value">
             {influencer.price_low && influencer.price_high && (influencer.price_low > 0 || influencer.price_high > 0)
-              ? `$${fmt(influencer.price_low)}–$${fmt(influencer.price_high)}`
+              ? <>{`$${fmt(influencer.price_low)}–$${fmt(influencer.price_high)}`}{influencer.price_estimated && <EstBadge />}</>
               : "N/A"}
           </div>
           <div className="stat-sub">per post</div>
@@ -553,10 +574,11 @@ export default function Dashboard({ jobId, onComplete, onReset, loading, results
             <span className="cell-value">{fmt(inf.followers)}</span>
             <span className="cell-value highlight">
               {inf.engagement_rate ? `${inf.engagement_rate}%` : "N/A"}
+              {inf.engagement_estimated && <EstBadge />}
             </span>
             <span className="cell-value">
               {inf.price_low && inf.price_high && (inf.price_low > 0 || inf.price_high > 0)
-                ? `$${fmt(inf.price_low)}–$${fmt(inf.price_high)}`
+                ? <>{`$${fmt(inf.price_low)}–$${fmt(inf.price_high)}`}{inf.price_estimated && <EstBadge />}</>
                 : "N/A"}
             </span>
             <RiskBadge flag={inf.risk_flag} />
