@@ -3,8 +3,21 @@ import json
 import os
 import re
 
+# ── LLM Provider Config ──────────────────────────────────────
+# Set LLM_PROVIDER to "gemini" (default) or "ollama"
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+
+# Gemini config
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+
+# Ollama config (optional fallback)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+
+print(f"[SCORING] LLM provider: {LLM_PROVIDER.upper()} "
+      f"({'model=' + GEMINI_MODEL if LLM_PROVIDER == 'gemini' else 'model=' + OLLAMA_MODEL})")
 
 SCORING_SYSTEM_PROMPT = """
 You are an influencer marketing analyst. Score each candidate on:
@@ -44,6 +57,7 @@ IMPORTANT: Every candidate must get a DIFFERENT composite_score. Do not give ide
 
 
 async def _ollama_chat(system: str, user: str) -> str:
+    """Call Ollama local LLM."""
     payload = {
         "model": OLLAMA_MODEL,
         "stream": False,
@@ -56,6 +70,47 @@ async def _ollama_chat(system: str, user: str) -> str:
         resp = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
         resp.raise_for_status()
         return resp.json()["message"]["content"].strip()
+
+
+async def _gemini_chat(system: str, user: str) -> str:
+    """Call Google Gemini API via REST."""
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is not set. Add it to your .env file.")
+
+    url = f"{GEMINI_BASE_URL}/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "system_instruction": {
+            "parts": [{"text": system}]
+        },
+        "contents": [{
+            "parts": [{"text": user}]
+        }],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 4096
+        }
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        # Extract text from Gemini response
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+async def _llm_chat(system: str, user: str) -> str:
+    """Unified LLM router — uses Gemini by default, falls back to Ollama."""
+    if LLM_PROVIDER == "gemini":
+        try:
+            return await _gemini_chat(system, user)
+        except Exception as e:
+            print(f"  [LLM] Gemini failed: {e}")
+            if OLLAMA_BASE_URL:
+                print(f"  [LLM] Falling back to Ollama...")
+                return await _ollama_chat(system, user)
+            raise
+    else:
+        return await _ollama_chat(system, user)
 
 
 def _parse_json(raw: str):
@@ -209,7 +264,7 @@ Score each candidate. Remember: every candidate must have a DIFFERENT composite_
 Return the JSON array.
 """
         try:
-            raw = await _ollama_chat(SCORING_SYSTEM_PROMPT, user_message)
+            raw = await _llm_chat(SCORING_SYSTEM_PROMPT, user_message)
             scored = _parse_json(raw)
             all_scored.extend(scored)
         except Exception as e:
@@ -242,7 +297,7 @@ Return ONLY a JSON array of strings. No explanation.
 Niche: {brief.get('niche')}
 Target audience: {brief.get('target_audience')}
 """
-    raw = await _ollama_chat("You are a helpful assistant.", user_message)
+    raw = await _llm_chat("You are a helpful assistant.", user_message)
     return _parse_json(raw)
 
 
@@ -270,7 +325,7 @@ Rules:
 - No emojis, no corporate speak
 - Return ONLY the message, nothing else
 """
-    return await _ollama_chat(
+    return await _llm_chat(
         "You are a brand partnerships manager who writes personalized, genuine outreach messages.",
         user_message
     )

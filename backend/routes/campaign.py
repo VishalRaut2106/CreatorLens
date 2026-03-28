@@ -114,8 +114,8 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
         print(f"[PIPELINE] Brief: {brief_dict}")
         print(f"{'='*60}")
 
-        # Step 1: Expand keywords via Ollama
-        print(f"\n[STEP 1] Expanding keywords via Ollama...")
+        # Step 1: Expand keywords via LLM
+        print(f"\n[STEP 1] Expanding keywords via LLM...")
         try:
             keywords = await expand_keywords(brief_dict)
             if brief.keywords:
@@ -233,8 +233,8 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
         enriched = fill_missing_estimates(enriched)
         print(f"[STEP 3b] ✓ Estimates filled")
 
-        # Step 4: Ollama scoring + summarization
-        print(f"\n[STEP 4] Scoring via Ollama...")
+        # Step 4: LLM scoring + summarization
+        print(f"\n[STEP 4] Scoring via LLM...")
         try:
             scored = await score_influencers(enriched, brief_dict)
 
