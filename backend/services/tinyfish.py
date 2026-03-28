@@ -19,7 +19,7 @@ def _get_headers():
 # -----------------------------------------------------------
 # Core: single agent call (SSE streaming → wait for COMPLETE)
 # -----------------------------------------------------------
-async def run_agent(url: str, goal: str, stealth: bool = False, retries: int = 2) -> dict:
+async def run_agent(url: str, goal: str, stealth: bool = False, retries: int = 1) -> dict:
     payload = {
         "url": url,
         "goal": goal,
@@ -28,7 +28,7 @@ async def run_agent(url: str, goal: str, stealth: bool = False, retries: int = 2
 
     for attempt in range(retries):
         try:
-            async with httpx.AsyncClient(timeout=180 if stealth else 90) as client:
+            async with httpx.AsyncClient(timeout=60 if stealth else 45) as client:
                 async with client.stream("POST", TINYFISH_URL, headers=_get_headers(), json=payload) as resp:
                     resp.raise_for_status()
                     current_run_id = None
@@ -84,7 +84,7 @@ async def discover_influencers(keywords: List[str], platforms: List[str]) -> Lis
                 f'Return ONLY a raw JSON array, no markdown, no table, no explanation. '
                 f'Format exactly: [{{"handle": "username", "platform": "{platform}", '
                 f'"followers": 1000000, "profile_url": "https://..."}}]. '
-                f'Max 5 results. Only real public accounts.'
+                f'Max 3 results. Only real public accounts.'
             )
             tasks.append(run_agent(url, goal, stealth=True))
 

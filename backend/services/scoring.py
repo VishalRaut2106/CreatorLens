@@ -79,7 +79,7 @@ async def _gemini_chat(system: str, user: str, retries: int = 5) -> str:
         raise ValueError("GEMINI_API_KEY is not set. Add it to your .env file.")
 
     # Try primary model first, fall back to alternative on persistent 429
-    models_to_try = [GEMINI_MODEL, "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+    models_to_try = [GEMINI_MODEL, "gemini-1.5-flash-latest", "gemini-1.0-pro"]
 
     for model in models_to_try:
         url = f"{GEMINI_BASE_URL}/models/{model}:generateContent?key={GEMINI_API_KEY}"

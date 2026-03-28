@@ -181,7 +181,7 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
                 valid_profiles.append(p)
 
         valid_profiles.sort(key=lambda x: x.get("_pre_score", 0), reverse=True)
-        profiles = valid_profiles[:5]
+        profiles = valid_profiles[:3]
         
         if not profiles:
             print(f"[STEP 2b] ✗ No valid profiles passed pre-filter — marking job as failed")
