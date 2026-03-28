@@ -11,10 +11,7 @@ app = FastAPI(title="CreatorLens API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        os.getenv("FRONTEND_URL", ""),  # set this in Render env vars after Vercel deploy
-    ],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
