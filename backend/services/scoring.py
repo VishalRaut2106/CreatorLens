@@ -5,20 +5,19 @@ import re
 import asyncio
 
 # ── LLM Provider Config ──────────────────────────────────────
-# Set LLM_PROVIDER to "gemini" (default) or "ollama"
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter").lower()
 
 # Gemini config
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
-# Ollama config (optional fallback)
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+# OpenRouter config
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-print(f"[SCORING] LLM provider: {LLM_PROVIDER.upper()} "
-      f"({'model=' + GEMINI_MODEL if LLM_PROVIDER == 'gemini' else 'model=' + OLLAMA_MODEL})")
+print(f"[SCORING] LLM provider: {LLM_PROVIDER.upper()}")
 
 SCORING_SYSTEM_PROMPT = """
 You are an influencer marketing analyst. Score each candidate on:
@@ -110,8 +109,36 @@ async def _gemini_chat(system: str, user: str, retries: int = 5) -> str:
     raise Exception("All Gemini models rate limited. Try again in a minute.")
 
 
+async def _openrouter_chat(system: str, user: str) -> str:
+    """Call OpenRouter API (supports many free models)."""
+    if not OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY is not set.")
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            f"{OPENROUTER_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": OPENROUTER_MODEL,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+
 async def _llm_chat(system: str, user: str) -> str:
-    """Unified LLM router — Gemini only with retry."""
+    """Unified LLM router — tries OpenRouter first, falls back to Gemini."""
+    if LLM_PROVIDER == "openrouter":
+        try:
+            return await _openrouter_chat(system, user)
+        except Exception as e:
+            print(f"  [LLM] OpenRouter failed: {e}, falling back to Gemini...")
     return await _gemini_chat(system, user)
 
 
