@@ -1,24 +1,16 @@
-import httpx
+"""
+scoring.py — Business logic for influencer scoring
+Contains pre-filtering, missing data estimation, keyword expansion,
+and LLM-based scoring.
+"""
+
 import json
-import os
-import re
-import asyncio
+from services.llm_client import llm_chat, parse_json
 
-# ── LLM Provider Config ──────────────────────────────────────
-# Set LLM_PROVIDER to "gemini" (default) or "ollama"
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
 
-# Gemini config
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-
-# Ollama config (optional fallback)
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-
-print(f"[SCORING] LLM provider: {LLM_PROVIDER.upper()} "
-      f"({'model=' + GEMINI_MODEL if LLM_PROVIDER == 'gemini' else 'model=' + OLLAMA_MODEL})")
+# ============================================================
+# SCORING SYSTEM PROMPT
+# ============================================================
 
 SCORING_SYSTEM_PROMPT = """
 You are an influencer marketing analyst. Score each candidate on:
@@ -57,123 +49,12 @@ IMPORTANT: Every candidate must get a DIFFERENT composite_score. Do not give ide
 """
 
 
-async def _ollama_chat(system: str, user: str) -> str:
-    """Call Ollama local LLM."""
-    payload = {
-        "model": OLLAMA_MODEL,
-        "stream": False,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ]
-    }
-    async with httpx.AsyncClient(timeout=300) as client:
-        resp = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
-        resp.raise_for_status()
-        return resp.json()["message"]["content"].strip()
-
-
-async def _gemini_chat(system: str, user: str, retries: int = 5) -> str:
-    """Call Google Gemini API via REST with exponential backoff on 429."""
-    if not GEMINI_API_KEY or "your_api_key" in GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY is not set correctly. Add it to your .env file.")
-
-    # Try primary model first, fall back to alternative on persistent 429
-    models_to_try = [GEMINI_MODEL, "gemini-1.5-flash", "gemini-1.5-flash-8b"]
-
-    import asyncio
-    base_delay = 2
-
-    for model in models_to_try:
-        url = f"{GEMINI_BASE_URL}/models/{model}:generateContent?key={GEMINI_API_KEY}"
-        payload = {
-            "system_instruction": {"parts": [{"text": system}]},
-            "contents": [{"parts": [{"text": user}]}],
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096}
-        }
-
-        for attempt in range(retries):
-            try:
-                async with httpx.AsyncClient(timeout=120) as client:
-                    resp = await client.post(url, json=payload)
-                    
-                    # Handle 429 specifically with backoff
-                    if resp.status_code == 429:
-                        if attempt < retries - 1:
-                            wait = base_delay * (2 ** attempt)
-                            print(f"  [LLM] {model} 429 (Rate Limit). Retrying in {wait}s (attempt {attempt+1}/{retries})...")
-                            await asyncio.sleep(wait)
-                            continue
-                        else:
-                            print(f"  [LLM] {model} rate limit exhausted, trying next model...")
-                            break # Break retry loop to try next model
-                    
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if not data.get("candidates"):
-                            print(f"  [LLM] {model} blocked/empty response: {data}")
-                            return ""
-
-                        parts = data["candidates"][0].get("content", {}).get("parts", [])
-                        if not parts:
-                            return ""
-                            
-                        return parts[0].get("text", "").strip()
-                    else:
-                        print(f"  [LLM] {model} error {resp.status_code}, trying next model...")
-                        break # Break retry loop to try next model
-
-            except Exception as e:
-                print(f"  [LLM] {model} request failed: {e}")
-                if attempt < retries - 1:
-                    await asyncio.sleep(base_delay)
-                    continue
-                else: break
-
-    raise Exception("All Gemini models rate limited or failed. Try again in a minute.")
-
-async def _llm_chat(system: str, user: str) -> str:
-    """Unified LLM router — Gemini only with retry."""
-    return await _gemini_chat(system, user)
-
-
-def _parse_json(raw: str):
-    """Parse JSON from LLM response, handling common issues like markdown blocks or chatty text."""
-    if not raw:
-        return []
-
-    # 1. Try direct parse
-    try:
-        return json.loads(raw, strict=False)
-    except json.JSONDecodeError:
-        pass
-
-    # 2. Extract content between first [ or { and last ] or }
-    import re
-    # Match for array or object
-    pattern = re.compile(r'(\[.*\]|\{.*\})', re.DOTALL)
-    match = pattern.search(raw)
-    
-    if match:
-        clean = match.group(1)
-        # Remove potential markdown debris
-        clean = clean.replace("```json", "").replace("```", "").strip()
-        try:
-            return json.loads(clean, strict=False)
-        except json.JSONDecodeError:
-            # Last ditch: remove control characters
-            clean = re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f]', '', clean)
-            try:
-                return json.loads(clean, strict=False)
-            except json.JSONDecodeError:
-                pass
-
-    # 3. Last fallback: return empty structure (usually keyword expansion expects a list)
-    print(f"  [LLM] FAILED TO PARSE JSON: {raw[:200]}...")
-    return []
-
+# ============================================================
+# PRE-FILTER — Quick scoring before deep audit
+# ============================================================
 
 def pre_filter_score(p):
+    """Quick score to decide which profiles are worth a deep audit."""
     followers = p.get("followers", 0)
     # The dictionary might have actual string values or numbers or be missing
     if not isinstance(followers, (int, float)):
@@ -223,14 +104,14 @@ def pre_filter_score(p):
     return score
 
 
-# -----------------------------------------------------------
-# Fallback estimator for missing agent data
-# -----------------------------------------------------------
+# ============================================================
+# FILL MISSING ESTIMATES — Fallback for missing data
+# ============================================================
+
 def fill_missing_estimates(profiles: list) -> list:
     """
-    When TinyFish qualification or pricing agents fail (timeout,
-    blocked, etc.), fill in reasonable estimates so the dashboard
-    doesn't show N/A everywhere.
+    When qualification or pricing agents fail (timeout, blocked, etc.),
+    fill in reasonable estimates so the dashboard doesn't show N/A everywhere.
     """
 
     # Industry-average engagement rates by platform
@@ -274,7 +155,7 @@ def fill_missing_estimates(profiles: list) -> list:
                 est = round(avg, 2)
             p["engagement_rate"] = est
             p["engagement_estimated"] = True
-            print(f"  [ESTIMATE] {p.get('handle')} engagement → {est}% (estimated)")
+            print(f"  [ESTIMATE] {p.get('handle')} engagement -> {est}% (estimated)")
 
         # ── Fill pricing ─────────────────────────────────────
         price_low  = p.get("price_low", 0) or 0
@@ -285,13 +166,18 @@ def fill_missing_estimates(profiles: list) -> list:
             p["price_low"]  = int(k * low_mult)
             p["price_high"] = int(k * high_mult)
             p["price_estimated"] = True
-            print(f"  [ESTIMATE] {p.get('handle')} pricing → ${p['price_low']:,}–${p['price_high']:,} (estimated)")
+            print(f"  [ESTIMATE] {p.get('handle')} pricing -> ${p['price_low']:,}-${p['price_high']:,} (estimated)")
 
     return profiles
 
 
+# ============================================================
+# LLM SCORING — Deep analysis via LLM
+# ============================================================
+
 async def score_influencers(enriched_profiles: list, brand_brief: dict) -> list:
-    # Score in batches of 5 to avoid Ollama timeout
+    """Score influencers using the LLM with the scoring rubric."""
+    # Score in batches of 5 to avoid LLM timeout
     BATCH_SIZE = 5
     all_scored = []
 
@@ -310,8 +196,8 @@ Score each candidate. Remember: every candidate must have a DIFFERENT composite_
 Return the JSON array.
 """
         try:
-            raw = await _llm_chat(SCORING_SYSTEM_PROMPT, user_message)
-            scored = _parse_json(raw)
+            raw = await llm_chat(SCORING_SYSTEM_PROMPT, user_message)
+            scored = parse_json(raw)
             all_scored.extend(scored)
         except Exception as e:
             print(f"  [SCORING] Batch {i // BATCH_SIZE + 1} failed: {e}")
@@ -334,6 +220,10 @@ Return the JSON array.
     all_scored.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
     return all_scored[:10]
 
+
+# ============================================================
+# KEYWORD EXPANSION — Template-based (no LLM needed)
+# ============================================================
 
 async def expand_keywords(brief: dict) -> list:
     """
@@ -379,33 +269,3 @@ async def expand_keywords(brief: dict) -> list:
 
     print(f"  [KEYWORDS] Generated {len(result)} keywords: {result}")
     return result
-
-
-async def draft_outreach(influencer: dict, brief: dict) -> str:
-    user_message = f"""
-Write a short outreach DM to @{influencer.get('handle')} on behalf of a brand.
-
-Brand details:
-- Niche: {brief.get('niche')}
-- Target audience: {brief.get('target_audience')}
-- Budget: ${brief.get('budget_min')}–${brief.get('budget_max')}
-
-Influencer details:
-- Platform: {influencer.get('platform')}
-- Followers: {influencer.get('followers')}
-- Engagement rate: {influencer.get('engagement_rate')}%
-- About them: {influencer.get('ai_summary')}
-
-Rules:
-- Max 80 words
-- Mention something SPECIFIC about their content or audience
-- Include the budget range naturally
-- End with a clear question to start conversation
-- Sound like a real human, not a template
-- No emojis, no corporate speak
-- Return ONLY the message, nothing else
-"""
-    return await _llm_chat(
-        "You are a brand partnerships manager who writes personalized, genuine outreach messages.",
-        user_message
-    )
