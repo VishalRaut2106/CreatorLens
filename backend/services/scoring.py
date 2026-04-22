@@ -336,15 +336,49 @@ Return the JSON array.
 
 
 async def expand_keywords(brief: dict) -> list:
-    user_message = f"""
-Given this brand brief, generate 5-8 search keywords to find relevant influencers.
-Return ONLY a JSON array of strings. No explanation.
+    """
+    Generate search keywords from the brand brief without any LLM call.
+    Template-based approach: faster, free, zero rate-limit risk.
+    """
+    niche    = (brief.get('niche') or '').strip().lower()
+    audience = (brief.get('target_audience') or '').strip().lower()
 
-Niche: {brief.get('niche')}
-Target audience: {brief.get('target_audience')}
-"""
-    raw = await _llm_chat("You are a helpful assistant.", user_message)
-    return _parse_json(raw)
+    # Extract first meaningful word from audience (e.g. "men 18-35 india" -> "men")
+    audience_word = ''
+    for word in audience.split():
+        if len(word) > 2 and not word.replace('-', '').isdigit():
+            audience_word = word
+            break
+
+    templates = [
+        niche,
+        f"{niche} influencer",
+        f"{niche} creator",
+        f"best {niche} influencer",
+        f"{niche} youtuber",
+        f"{niche} content creator",
+    ]
+
+    if audience_word:
+        templates.append(f"{audience_word} {niche} influencer")
+        templates.append(f"{niche} for {audience_word}")
+
+    # Also include any user-supplied keywords from the brief
+    user_keywords = brief.get('keywords') or []
+    all_keywords  = templates + [k for k in user_keywords if k not in templates]
+
+    # Deduplicate and cap at 8
+    seen, result = set(), []
+    for kw in all_keywords:
+        kw = kw.strip()
+        if kw and kw not in seen:
+            seen.add(kw)
+            result.append(kw)
+        if len(result) >= 8:
+            break
+
+    print(f"  [KEYWORDS] Generated {len(result)} keywords: {result}")
+    return result
 
 
 async def draft_outreach(influencer: dict, brief: dict) -> str:

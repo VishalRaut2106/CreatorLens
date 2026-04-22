@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from models.schemas import BrandBrief, CampaignResponse, JobStatus
 from db.database import create_job, update_job_status, save_results, get_job, get_conn
-from services.tinyfish import discover_influencers, run_full_audit, cancel_all_runs, active_runs, find_competitor_influencers
+from services.agents import discover_influencers, run_full_audit, cancel_all_runs, active_runs, find_competitor_influencers
 from services.scoring import score_influencers, expand_keywords, draft_outreach, pre_filter_score, fill_missing_estimates
 import uuid
 import json
@@ -66,12 +66,10 @@ async def generate_outreach(job_id: str, handle: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Find the influencer
     influencer = next((r for r in results if r.get("handle") == handle), None)
     if not influencer:
         raise HTTPException(status_code=404, detail="Influencer not found")
 
-    # Get the brief
     import json
     brief = json.loads(job["brief_json"])
 
@@ -131,7 +129,7 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             return
 
         # Step 2: Discover influencer profiles + competitor intel in parallel
-        print(f"\n[STEP 2] Discovering influencers via TinyFish...")
+        print(f"\n[STEP 2] Discovering influencers...")
         try:
             competitor_task = None
             if brief.competitor_brand:
@@ -148,7 +146,6 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
                 print(f"  [COMPETITOR] Found {len(competitor_profiles)} partnerships")
                 
                 competitor_handles = {p.get("handle", "").lower().replace("@", "") for p in competitor_profiles}
-                # Flag profiles already used by competitor
                 for p in profiles:
                     handle = p.get("handle", "").lower().replace("@", "")
                     if handle in competitor_handles:
@@ -175,7 +172,7 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             update_job_status(job_id, "failed")
             return
 
-        # Pre-filter and cap to top 5 to save agent calls
+        # Pre-filter and cap to top 5
         print(f"\n[STEP 2b] Pre-filtering discovered profiles...")
         valid_profiles = []
         for p in profiles:
@@ -200,7 +197,6 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             enriched = await run_full_audit(profiles, brief_dict)
             print(f"[STEP 3] ✓ Enriched {len(enriched)} profiles")
 
-            # Re-sort by actual followers from qualification agents
             enriched = sorted(
                 enriched, 
                 key=lambda x: x.get("followers", 0), 
@@ -212,9 +208,9 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
                 engagement = p.get("engagement_rate") or 0
                 score += engagement * 10
                 risk = p.get("risk_flag", "green")
-                if risk == "red":    score -= 50
+                if risk == "red":     score -= 50
                 elif risk == "amber": score -= 10
-                else:                score += 20
+                else:                 score += 20
                 price_high = p.get("price_high") or 0
                 budget_max = brief_dict.get("budget_max", 5000)
                 if 0 < price_high <= budget_max: score += 30
@@ -222,7 +218,7 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
                 return score
 
             enriched = sorted(enriched, key=post_audit_score, reverse=True)
-            print(f"[STEP 3] Re-ranked by audit quality (engagement + risk + price)")
+            print(f"[STEP 3] Re-ranked by audit quality")
             for e in enriched[:10]:
                 print(f"  - {e.get('handle')}: engagement={e.get('engagement_rate')}% risk={e.get('risk_flag')}")
         except Exception as e:
@@ -231,8 +227,8 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             update_job_status(job_id, "failed")
             return
 
-        # Step 3b: Fill missing estimates for failed agents
-        print(f"\n[STEP 3b] Filling missing agent data with estimates...")
+        # Step 3b: Fill missing estimates
+        print(f"\n[STEP 3b] Filling missing data with estimates...")
         enriched = fill_missing_estimates(enriched)
         print(f"[STEP 3b] ✓ Estimates filled")
 
@@ -244,26 +240,23 @@ async def execute_pipeline(job_id: str, brief: BrandBrief):
             for s in scored:
                 s["handle"] = s.get("handle", "").lower().strip().lstrip("@")
 
-            # Merge raw stats back onto scored results
             enriched_map = {p["handle"].lower().strip().lstrip("@"): p for p in enriched}
             for s in scored:
                 raw = enriched_map.get(s.get("handle", ""), {})
-                s.setdefault("followers", raw.get("followers", 0))
-                s.setdefault("engagement_rate", raw.get("engagement_rate", None))
-                s.setdefault("price_low", raw.get("price_low", 0))
-                s.setdefault("price_high", raw.get("price_high", 0))
-                s.setdefault("risk_flag", raw.get("risk_flag", "green"))
-                s.setdefault("risk_evidence", raw.get("risk_evidence", None))
-                s.setdefault("risk_sources", raw.get("risk_sources", []))
-                s.setdefault("competitor_flag", raw.get("competitor_flag", False))
-                s.setdefault("competitor_evidence", raw.get("competitor_evidence", None))
-                s.setdefault("engagement_estimated", raw.get("engagement_estimated", False))
-                s.setdefault("price_estimated", raw.get("price_estimated", False))
-                # Sanitize platform
+                s.setdefault("followers",             raw.get("followers", 0))
+                s.setdefault("engagement_rate",       raw.get("engagement_rate", None))
+                s.setdefault("price_low",             raw.get("price_low", 0))
+                s.setdefault("price_high",            raw.get("price_high", 0))
+                s.setdefault("risk_flag",             raw.get("risk_flag", "green"))
+                s.setdefault("risk_evidence",         raw.get("risk_evidence", None))
+                s.setdefault("risk_sources",          raw.get("risk_sources", []))
+                s.setdefault("competitor_flag",       raw.get("competitor_flag", False))
+                s.setdefault("competitor_evidence",   raw.get("competitor_evidence", None))
+                s.setdefault("engagement_estimated",  raw.get("engagement_estimated", False))
+                s.setdefault("price_estimated",       raw.get("price_estimated", False))
                 valid_platforms = {"instagram", "tiktok", "youtube", "twitter"}
                 if s.get("platform", "").lower() not in valid_platforms:
                     s["platform"] = raw.get("platform", "instagram")
-                # Sanitize risk_flag
                 if s.get("risk_flag") not in ("green", "amber", "red"):
                     s["risk_flag"] = "green"
 
