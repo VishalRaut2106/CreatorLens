@@ -5,3 +5,8 @@ httpx
 pydantic
 sqlalchemy
 tavily-python
+
+# LangChain ecosystem
+langchain-core
+langchain-groq
+
