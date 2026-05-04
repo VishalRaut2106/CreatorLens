@@ -106,7 +106,7 @@ class KeywordBuckets(BaseModel):
                                           description="Queries targeting what the creator POSTS")
     audience_intent:    list[str] = Field(..., min_length=3, max_length=8,
                                           description="Queries targeting what the AUDIENCE searches")
-    competitor:         list[str] = Field(..., min_length=3, max_length=8,
+    competitor:         list[str] = Field(..., min_length=1, max_length=8,
                                           description="Queries to find competitor brand ambassadors")
 
 
@@ -388,7 +388,7 @@ def _build_json_skeleton(brief: BrandBrief) -> str:
             "strong_engagement_rate":     tier["strong_er"],
             "min_view_to_sub_ratio":      0.05,
             "healthy_like_comment_ratio": [20, 50],
-            "min_posts_per_month":        "<2 for YouTube, 4 for Instagram — fill based on platform norms>",
+            "min_posts_per_month":        2,
             "max_follower_growth_pct":    20.0
         },
         "brand_safety": {
@@ -545,7 +545,7 @@ async def run_icp_chain(brief: BrandBrief, groq_api_key: str) -> ICPProfile:
 
 
 # ─────────────────────────────────────────────
-# QUICK LOCAL TEST  (python chain0_icp_builder.py)
+# QUICK LOCAL TEST  (python chain_0_ICP.py)
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":

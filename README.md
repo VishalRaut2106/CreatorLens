@@ -55,6 +55,10 @@ An influencer marketing intelligence platform that automates the entire pre-camp
 CreatorLens/
 ├── backend/
 │   ├── main.py                       # FastAPI app entry point, CORS, router registration
+│   ├── chains/
+│   │   ├── chain_0_ICP.py            # Converts brand briefs into Ideal Creator Profiles (ICP)
+│   │   ├── chain_1_keywordExpansion.py # Maps ICP into executable platform search queries
+│   │   └── chain_2_discovery.py      # Orchestrates platform searches to discover raw candidates
 │   ├── routes/
 │   │   └── campaign.py               # API route definitions (no business logic)
 │   ├── services/
@@ -63,8 +67,8 @@ CreatorLens/
 │   │   │   └── tavily.py             # Tavily web search client (search, parsing, competitor intel)
 │   │   ├── discovery.py              # Multi-platform discovery aggregator
 │   │   ├── auditor.py                # Profile qualification, brand safety audit, pricing
-│   │   ├── llm_client.py             # Gemini/Ollama API calls, retry logic, JSON parsing
-│   │   ├── scoring.py                # Pre-filter, missing data estimates, LLM scoring, keyword expansion
+│   │   ├── llm_client.py             # LLM API calls, retry logic, JSON parsing
+│   │   ├── scoring.py                # Pre-filter, missing data estimates, LLM scoring
 │   │   ├── outreach.py               # Personalized outreach message drafting
 │   │   ├── pipeline.py               # Full campaign execution pipeline (background task)
 │   │   └── agents.py                 # Backward-compatibility shim (re-exports only)
@@ -132,29 +136,29 @@ CreatorLens/
 
 ### Pipeline Data Flow
 
-The core pipeline runs as a **background task** after a brand brief is submitted:
+The core pipeline runs as a **background task** after a brand brief is submitted. The new chained architecture handles reasoning first, then data execution:
 
 ```
 Brand Brief
     │
     ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ Step 1: Keyword Expansion (Python Templates)                 │
-│ Template logic generates 5-8 search keywords from the brief  │
+│ Chain 0: ICP Generation (LLM)                                │
+│ Transforms raw brief into a structured Ideal Creator Profile │
+│ including psychographics, competitor sets, and strict bounds.│
 └──────────────────────┬───────────────────────────────────────┘
                        ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ Step 2: Discovery (YouTube API + Tavily)                     │
-│ YouTube Data API searches for channels by keyword            │
-│ Tavily searches for Instagram/Twitter profiles               │
-│                                                              │
-│ + Optional: Competitor intel search runs in parallel          │
+│ Chain 1: Keyword Expansion (LLM)                             │
+│ Generates highly-specific search query objects tailored for  │
+│ YouTube Data API (e.g. "skincare review 2025") and Tavily.   │
 └──────────────────────┬───────────────────────────────────────┘
                        ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ Step 2b: Pre-Filter Scoring (Local)                          │
-│ Heuristic filter: follower floor (5K), spam handle detection,│
-│ platform weighting, fake-follower signals → Top 5 selected   │
+│ Chain 2: Discovery (Platform APIs)                           │
+│ Executes queries against YouTube/Tavily concurrently.        │
+│ Deduplicates and builds rich, unfiltered creator profiles    │
+│ complete with recent video engagement stats.                 │
 └──────────────────────┬───────────────────────────────────────┘
                        ▼
 ┌──────────────────────────────────────────────────────────────┐

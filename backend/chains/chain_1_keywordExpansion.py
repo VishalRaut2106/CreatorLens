@@ -5,7 +5,7 @@ Takes the ICPProfile from Chain 0 and formats every keyword bucket into
 API-ready search objects for Chain 2 (Discovery).
 
 Why NO LLM here:
-  Chain 0 already paid Gemini to think. This chain's job is pure formatting
+  Chain 0 already paid Groq to think. This chain's job is pure formatting
   — turning "whey protein taste test honest" into the exact query object that
   the YouTube Data API v3 and Tavily REST API expect. Deterministic, instant,
   zero API cost.
@@ -23,7 +23,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from chain0_icp_builder import ICPProfile, Platform
+from chain_0_ICP import ICPProfile, Platform
 
 logger = logging.getLogger(__name__)
 
@@ -513,19 +513,19 @@ def run_keyword_expansion(icp: ICPProfile) -> ExpandedKeywordSet:
 # HOW PIPELINE.PY CALLS CHAINS 0 AND 1
 # ─────────────────────────────────────────────
 
-async def run_icp_and_keywords(brief, gemini_api_key: str) -> tuple[ICPProfile, ExpandedKeywordSet]:
+async def run_icp_and_keywords(brief, groq_api_key: str) -> tuple[ICPProfile, ExpandedKeywordSet]:
     """
     Convenience wrapper for pipeline.py.
     Chains 0 and 1 always run together — Chain 1 has no meaning without Chain 0's output.
 
     Usage in pipeline.py:
-        icp, keywords = await run_icp_and_keywords(brief, settings.GEMINI_API_KEY)
+        icp, keywords = await run_icp_and_keywords(brief, settings.GROQ_API_KEY)
         # Then pass both into Chain 2
         candidates = await run_discovery(icp, keywords)
     """
-    from chain0_icp_builder import run_icp_chain
+    from chain_0_ICP import run_icp_chain
 
-    icp      = await run_icp_chain(brief, gemini_api_key)
+    icp      = await run_icp_chain(brief, groq_api_key)
     keywords = run_keyword_expansion(icp)   # sync — no await needed
     return icp, keywords
 
@@ -536,7 +536,9 @@ async def run_icp_and_keywords(brief, gemini_api_key: str) -> tuple[ICPProfile, 
 
 if __name__ == "__main__":
     import asyncio, os, json
-    from chain0_icp_builder import (
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+    from chain_0_ICP import (
         BrandBrief, CampaignGoal, Platform, FollowerTier
     )
 
@@ -556,24 +558,24 @@ if __name__ == "__main__":
     )
 
     async def main():
-        icp, keywords = await run_icp_and_keywords(sample_brief, os.environ["GEMINI_API_KEY"])
+        icp, keywords = await run_icp_and_keywords(sample_brief, os.environ["GROQ_API_KEY"])
 
-        print("\n══ YOUTUBE QUERIES ══")
+        print("\n== YOUTUBE QUERIES ==")
         for i, q in enumerate(keywords.youtube_queries, 1):
             print(f"  {i:02d}. [{q.purpose:15}] [{q.search_type}] {q.query}")
 
-        print("\n══ TAVILY DISCOVERY ══")
+        print("\n== TAVILY DISCOVERY ==")
         for i, q in enumerate(keywords.tavily_discovery, 1):
             print(f"  {i:02d}. {q.query[:90]}")
 
-        print("\n══ TAVILY COMPETITOR ══")
+        print("\n== TAVILY COMPETITOR ==")
         for i, q in enumerate(keywords.tavily_competitor, 1):
             print(f"  {i:02d}. {q.query[:90]}")
 
-        print("\n══ HASHTAGS (Instagram) ══")
+        print("\n== HASHTAGS (Instagram) ==")
         print("  ", " ".join(keywords.hashtags.instagram[:10]))
 
-        print(f"\n══ QUOTA ══")
+        print(f"\n== QUOTA ==")
         print(f"  Estimated cost : {keywords.estimated_quota_cost} units")
         print(f"  Daily budget   : {DAILY_QUOTA_LIMIT} units")
         print(f"  Remaining      : {keywords.quota_budget_remaining_pct}%")

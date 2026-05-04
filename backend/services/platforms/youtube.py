@@ -21,22 +21,34 @@ YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 # LOW-LEVEL API CALLS
 # ============================================================
 
-async def youtube_search(query: str, max_results: int = 5) -> list:
-    """Search YouTube for channels. Cost: 100 units per call."""
+async def youtube_search(
+    query: str, 
+    max_results: int = 5, 
+    search_type: str = "channel",
+    region_code: str | None = None,
+    relevance_language: str | None = None
+) -> list:
+    """Search YouTube for videos or channels. Cost: 100 units per call."""
     if not YOUTUBE_API_KEY:
         print("  [YOUTUBE] No API key — skipping search")
         return []
     try:
+        params = {
+            "key":        YOUTUBE_API_KEY,
+            "q":          query,
+            "type":       search_type,
+            "part":       "snippet",
+            "maxResults": max_results,
+        }
+        if region_code:
+            params["regionCode"] = region_code
+        if relevance_language:
+            params["relevanceLanguage"] = relevance_language
+
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
                 "https://www.googleapis.com/youtube/v3/search",
-                params={
-                    "key":        YOUTUBE_API_KEY,
-                    "q":          query,
-                    "type":       "channel",
-                    "part":       "snippet",
-                    "maxResults": max_results,
-                }
+                params=params
             )
             resp.raise_for_status()
             return resp.json().get("items", [])
@@ -192,6 +204,7 @@ async def build_channel_profile(channel_id: str, handle: str = "") -> dict:
     avg_comments = 0
     engagement_rate   = 0.0
     engagement_source = "estimated"
+    recent_videos_data = []
 
     uploads_playlist_id = (
         content_details.get("relatedPlaylists", {}).get("uploads", "")
@@ -208,9 +221,20 @@ async def build_channel_profile(channel_id: str, handle: str = "") -> dict:
 
                 for v in video_items:
                     s = v.get("statistics", {})
-                    views_list.append(   int(s.get("viewCount",    0)))
-                    likes_list.append(   int(s.get("likeCount",    0)))
-                    comments_list.append(int(s.get("commentCount", 0)))
+                    views = int(s.get("viewCount", 0))
+                    likes = int(s.get("likeCount", 0))
+                    comments = int(s.get("commentCount", 0))
+                    
+                    views_list.append(views)
+                    likes_list.append(likes)
+                    comments_list.append(comments)
+                    
+                    recent_videos_data.append({
+                        "video_id": v.get("id"),
+                        "views": views,
+                        "likes": likes,
+                        "comments": comments
+                    })
 
                 n = len(video_items)
                 avg_views    = sum(views_list)    // n
@@ -271,6 +295,7 @@ async def build_channel_profile(channel_id: str, handle: str = "") -> dict:
         "avg_comments":        avg_comments,
         "engagement_rate":     engagement_rate,
         "engagement_source":   engagement_source,
+        "recent_videos":       recent_videos_data,
     }
 
 
