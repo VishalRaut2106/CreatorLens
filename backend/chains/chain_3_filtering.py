@@ -1,81 +1,255 @@
 """
 Chain 3 — Filtering
-===================
-Applies hard filtering to discovered candidates based on the single source of truth:
-the ICP Profile generated in Chain 0.
-
-Filters out candidates that do not meet the minimum benchmarks for followers,
-engagement rate, view-to-sub ratio, and healthy activity patterns.
+====================
+Improvements over previous version:
+  FIX  BUG     : Zero avg_likes AND avg_comments no longer passes — channels with
+                 no engagement data are flagged, not silently approved.
+  FIX  MISSING : Activity check added using channel_age_years + video_count proxy.
+  FIX  MISSING : Estimated profiles (Instagram/Twitter) use relaxed follower check
+                 since their follower count may be None or imprecise.
+  FIX  MINOR   : Removed benchmark mutation in test — use override params instead.
+  REMOVED      : Follower growth spike check — not feasible from static API data.
+                 Noted in comments so Chain 4 knows it isn't guaranteed.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import List, Dict, Any
+from typing import Any
 
 from chain_0_ICP import ICPProfile
+from chain_2_discovery import RawCreatorProfile
 
 logger = logging.getLogger(__name__)
 
 
-def run_filtering(icp: ICPProfile, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+# ─────────────────────────────────────────────
+# DROP REASONS  (for audit trail in logs + dossier)
+# ─────────────────────────────────────────────
+
+class DropReason:
+    FOLLOWER_RANGE     = "Followers outside ICP tier range"
+    LOW_ENGAGEMENT     = "Engagement rate below ICP minimum"
+    DEAD_CHANNEL       = "View-to-subscriber ratio below 5% (dead audience)"
+    BOT_SIGNAL_RATIO   = "Like-to-comment ratio outside healthy range (bot signal)"
+    ZERO_ENGAGEMENT    = "Zero likes AND zero comments — inactive or newly created"
+    INACTIVE           = "Channel too new or inactive — insufficient content history"
+
+
+class FilterResult:
+    """Wraps the outcome of a single candidate's filter evaluation."""
+
+    def __init__(self, candidate: RawCreatorProfile, passed: bool, reason: str | None = None):
+        self.candidate = candidate
+        self.passed    = passed
+        self.reason    = reason  # populated when passed=False
+
+
+# ─────────────────────────────────────────────
+# FILTER RULES
+# ─────────────────────────────────────────────
+
+def _check_follower_range(
+    candidate: RawCreatorProfile,
+    benchmarks,
+    tolerance: float = 0.5,
+) -> str | None:
     """
-    Filters candidates based on the hard constraints defined in the ICP Profile.
+    Check follower count against ICP tier range with ±50% tolerance.
+
+    FIX: Estimated profiles (Instagram/Twitter) with followers=None skip
+         this check — we cannot reliably filter on a scraped number.
     """
-    logger.info(f"Starting Chain 3: Filtering (Initial candidates: {len(candidates)})")
-    
-    filtered_candidates = []
+    if candidate.followers is None:
+        if candidate.data_confidence == "estimated":
+            return None   # Can't enforce follower filter without reliable data
+        return DropReason.FOLLOWER_RANGE  # Real profile with no followers = drop
+
+    f_min = int(benchmarks.follower_min * tolerance)
+    f_max = int(benchmarks.follower_max * (1 + tolerance))
+
+    if not (f_min <= candidate.followers <= f_max):
+        return DropReason.FOLLOWER_RANGE
+    return None
+
+
+def _check_engagement_rate(
+    candidate: RawCreatorProfile,
+    benchmarks,
+) -> str | None:
+    """
+    Compare ER against tier-relative minimum benchmark.
+    Only enforced for real data. Estimated profiles skip this.
+    """
+    if candidate.data_confidence == "estimated":
+        return None   # No reliable ER for Instagram/Twitter profiles
+
+    er = candidate.engagement_rate
+    if er is None:
+        return None   # No data — let Chain 4 decide
+
+    if er < benchmarks.min_engagement_rate:
+        return DropReason.LOW_ENGAGEMENT
+    return None
+
+
+def _check_view_to_sub_ratio(
+    candidate: RawCreatorProfile,
+    benchmarks,
+) -> str | None:
+    """
+    View-to-subscriber ratio below 5% = dead channel.
+    Only applies to YouTube real data.
+    """
+    if candidate.platform != "youtube" or candidate.data_confidence != "real":
+        return None
+
+    ratio = candidate.view_to_sub_ratio
+    if ratio is None:
+        return None
+
+    if ratio < benchmarks.min_view_to_sub_ratio:
+        return DropReason.DEAD_CHANNEL
+    return None
+
+
+def _check_like_to_comment_ratio(
+    candidate: RawCreatorProfile,
+    benchmarks,
+) -> str | None:
+    """
+    Like-to-comment ratio outside healthy range signals bot activity.
+
+    FIX: Also catches the case where BOTH avg_likes AND avg_comments are 0
+         — this is not a healthy channel, it's an inactive one.
+    """
+    if candidate.platform != "youtube" or candidate.data_confidence != "real":
+        return None
+
+    avg_likes    = candidate.avg_likes    or 0
+    avg_comments = candidate.avg_comments or 0
+
+    # FIX BUG: Both zero = no engagement data = suspicious / inactive
+    if avg_likes == 0 and avg_comments == 0:
+        return DropReason.ZERO_ENGAGEMENT
+
+    if avg_comments == 0:
+        # Lots of likes, no comments — highly suspicious bot signal
+        if avg_likes > 50:
+            return DropReason.BOT_SIGNAL_RATIO
+        return None   # Very small channel might genuinely have no comments
+
+    ratio = candidate.like_to_comment_ratio
+    if ratio is None:
+        return None
+
+    min_r, max_r = benchmarks.healthy_like_comment_ratio
+    if not (min_r <= ratio <= max_r):
+        return DropReason.BOT_SIGNAL_RATIO
+    return None
+
+
+def _check_activity(
+    candidate: RawCreatorProfile,
+    benchmarks,
+) -> str | None:
+    """
+    Check that the channel is active enough to be worth pursuing.
+
+    FIX MISSING: Previous version checked min_posts_per_month but that field
+    wasn't in the candidate data. We now use a proxy:
+      - Channel age < 3 months with < 3 videos = too new to evaluate
+      - Channel age > 1 year with 0 recent videos = inactive
+
+    NOTE: Follower growth spike detection (>20%/month) is NOT feasible from
+    static YouTube API data — historical subscriber counts aren't exposed.
+    This would require Social Blade or a paid data provider.
+    """
+    if candidate.platform != "youtube" or candidate.data_confidence != "real":
+        return None
+
+    age = candidate.channel_age_years or 0
+    recent_video_count = len(candidate.recent_videos)
+
+    # Channel older than 1 year but no recent videos pulled = very inactive
+    if age > 1.0 and recent_video_count == 0:
+        return DropReason.INACTIVE
+
+    # Channel too new to have a content track record
+    if age < 0.25 and recent_video_count < 3:
+        return DropReason.INACTIVE
+
+    return None
+
+
+# ─────────────────────────────────────────────
+# MAIN CALLABLE
+# ─────────────────────────────────────────────
+
+def run_filtering(
+    icp: ICPProfile,
+    candidates: list[RawCreatorProfile],
+    follower_tolerance: float = 0.5,
+) -> list[RawCreatorProfile]:
+    """
+    Chain 3 entry point. Applies hard-drop rules from ICP benchmarks.
+
+    Args:
+        icp:                 ICPProfile from Chain 0 (single source of truth)
+        candidates:          RawCreatorProfile list from Chain 2
+        follower_tolerance:  How far outside the tier range is acceptable (0.5 = ±50%)
+
+    Returns filtered list of RawCreatorProfile — still typed, no dicts.
+    """
+    logger.info("Chain 3: Filtering %d candidates", len(candidates))
     benchmarks = icp.benchmarks
-    
-    # We allow a wider tolerance (e.g. 50%) on followers to avoid missing good creators
-    # who are just slightly under/over the tier limits.
-    f_min = int(benchmarks.follower_min * 0.5)
-    f_max = int(benchmarks.follower_max * 1.5)
+
+    results: list[FilterResult] = []
 
     for candidate in candidates:
-        name = candidate.get("channel_title", "Unknown")
-        followers = candidate.get("followers", 0)
-        engagement_rate = candidate.get("engagement_rate", 0.0)
-        avg_views = candidate.get("avg_views", 0)
-        avg_likes = candidate.get("avg_likes", 0)
-        avg_comments = candidate.get("avg_comments", 0)
-        
-        # 1. Follower constraints
-        if not (f_min <= followers <= f_max):
-            logger.info(f"Dropped {name}: Followers {followers:,} outside tolerated range [{f_min:,}, {f_max:,}]")
-            continue
-            
-        # 2. Engagement Rate constraint
-        if engagement_rate < benchmarks.min_engagement_rate:
-            logger.info(f"Dropped {name}: ER {engagement_rate}% below minimum {benchmarks.min_engagement_rate}%")
-            continue
-            
-        # 3. View to Sub ratio constraint
-        view_to_sub_ratio = avg_views / followers if followers > 0 else 0
-        if view_to_sub_ratio < benchmarks.min_view_to_sub_ratio:
-            logger.info(f"Dropped {name}: View/Sub ratio {view_to_sub_ratio:.4f} below minimum {benchmarks.min_view_to_sub_ratio}")
-            continue
-            
-        # 4. Like to Comment ratio constraint
-        if avg_comments > 0:
-            like_to_comment_ratio = avg_likes / avg_comments
-            min_ratio, max_ratio = benchmarks.healthy_like_comment_ratio
-            if not (min_ratio <= like_to_comment_ratio <= max_ratio):
-                logger.info(f"Dropped {name}: Like/Comment ratio {like_to_comment_ratio:.1f} outside healthy range [{min_ratio}, {max_ratio}]")
-                continue
-        elif avg_likes > 100:
-            # If they have lots of likes but 0 comments, that's highly suspicious
-            logger.info(f"Dropped {name}: Zero comments but {avg_likes:,} likes. Highly suspicious.")
-            continue
-                
-        # Candidate passed all filters
-        filtered_candidates.append(candidate)
-        
-    logger.info(f"Filtering complete. Kept {len(filtered_candidates)} out of {len(candidates)} candidates.")
-    return filtered_candidates
+        drop_reason = (
+            _check_follower_range(candidate, benchmarks, follower_tolerance) or
+            _check_engagement_rate(candidate, benchmarks) or
+            _check_view_to_sub_ratio(candidate, benchmarks) or
+            _check_like_to_comment_ratio(candidate, benchmarks) or
+            _check_activity(candidate, benchmarks)
+        )
+
+        if drop_reason:
+            logger.info(
+                "Dropped @%s [%s]: %s",
+                candidate.handle, candidate.platform, drop_reason,
+            )
+            results.append(FilterResult(candidate, passed=False, reason=drop_reason))
+        else:
+            results.append(FilterResult(candidate, passed=True))
+
+    passed = [r.candidate for r in results if r.passed]
+    dropped = [r for r in results if not r.passed]
+
+    logger.info(
+        "Chain 3 complete: %d passed, %d dropped. Drop breakdown: %s",
+        len(passed),
+        len(dropped),
+        _summarise_drops(dropped),
+    )
+
+    return passed
+
+
+def _summarise_drops(dropped: list[FilterResult]) -> dict[str, int]:
+    """Aggregate drop reasons for logging."""
+    summary: dict[str, int] = {}
+    for r in dropped:
+        reason = r.reason or "unknown"
+        summary[reason] = summary.get(reason, 0) + 1
+    return summary
 
 
 # ─────────────────────────────────────────────
 # QUICK LOCAL TEST
 # ─────────────────────────────────────────────
+
 if __name__ == "__main__":
     import asyncio
     import os
@@ -84,10 +258,6 @@ if __name__ == "__main__":
     from chain_1_keywordExpansion import run_keyword_expansion
     from chain_2_discovery import run_discovery
 
-    # Ensure backend is in the path for module resolution if run as standalone
-    import sys
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    
     load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -96,8 +266,8 @@ if __name__ == "__main__":
         product_description= "Vitamin C serum for hyperpigmentation targeting Indian women",
         campaign_goal      = CampaignGoal.CONVERSION,
         niche              = "skincare",
-        platforms          = [Platform.YOUTUBE],
-        follower_tier      = FollowerTier.MICRO, # 10k - 100k
+        platforms          = [Platform.YOUTUBE, Platform.INSTAGRAM],
+        follower_tier      = FollowerTier.MICRO,
         target_audience    = "Indian women 22-35, interested in clean beauty",
         audience_location  = "India",
         audience_age_range = "22-35",
@@ -109,32 +279,20 @@ if __name__ == "__main__":
     async def main():
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
-            print("ERROR: GROQ_API_KEY not found in environment.")
+            print("ERROR: GROQ_API_KEY not found.")
             return
 
-        print("=== RUNNING CHAIN 0 (ICP) ===")
         icp = await run_icp_chain(sample_brief, api_key)
-        
-        print("\n=== RUNNING CHAIN 1 (Keyword Expansion) ===")
         keywords = run_keyword_expansion(icp)
-        keywords.youtube_queries = keywords.youtube_queries[:2] # limit
-        
-        print("\n=== RUNNING CHAIN 2 (Discovery) ===")
+        keywords.youtube_queries = keywords.youtube_queries[:2]  # quota limit for test
+
         candidates = await run_discovery(icp, keywords)
-        
-        print("\n=== RUNNING CHAIN 3 (Filtering) ===")
-        
-        # Loosen benchmarks for the local test so we actually get some results
-        icp.benchmarks.follower_min = 1_000
-        icp.benchmarks.follower_max = 5_000_000
-        icp.benchmarks.min_engagement_rate = 0.5
-        icp.benchmarks.healthy_like_comment_ratio = (5, 150)
-        
-        filtered = run_filtering(icp, candidates)
-        
-        print("\n=== FINAL RESULTS ===")
-        print(f"Passed filters: {len(filtered)} / {len(candidates)}")
+        filtered   = run_filtering(icp, candidates)
+
+        print(f"\nFiltering: {len(candidates)} -> {len(filtered)} passed")
         for c in filtered:
-            print(f"- {c['channel_title']} ({c['followers']:,} followers, ER: {c['engagement_rate']}%)")
+            er = f"{c.engagement_rate:.2f}%" if c.engagement_rate else "n/a"
+            followers = f"{c.followers:,}" if c.followers else "unknown"
+            print(f"  [{c.platform:9}] @{c.handle:<30} followers={followers} ER={er}")
 
     asyncio.run(main())

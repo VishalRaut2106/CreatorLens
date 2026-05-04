@@ -475,7 +475,7 @@ def build_icp_chain(groq_api_key: str) -> RunnableSerializable:
     """
 
     llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         api_key=groq_api_key,
         temperature=0.2,        # low — we want consistent structured output, not creativity
         max_tokens=4096,
