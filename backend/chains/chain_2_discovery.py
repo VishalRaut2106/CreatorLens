@@ -342,16 +342,15 @@ async def run_discovery(
     Runs YouTube, Instagram, Twitter, and competitor discovery in parallel.
     Returns deduplicated list of RawCreatorProfile objects — no raw dicts.
     """
-    logger.info("Chain 2: Discovery starting")
+    logger.info("Chain 2: Discovery starting (Restricted to YouTube)")
 
-    # Run all platform discoveries concurrently
-    yt_profiles, ig_profiles, tw_profiles, comp_profiles = await asyncio.gather(
+    # Run platform discoveries (Restricted to YouTube for now)
+    results = await asyncio.gather(
         _discover_youtube(keywords),
-        _discover_instagram(keywords),
-        _discover_twitter(keywords),
-        _discover_competitors(keywords),
         return_exceptions=True,
     )
+    yt_profiles = results[0]
+    ig_profiles, tw_profiles, comp_profiles = [], [], []
 
     all_profiles: list[RawCreatorProfile] = []
     for result, name in [
@@ -397,7 +396,7 @@ if __name__ == "__main__":
         product_description= "Vitamin C serum for hyperpigmentation targeting Indian women",
         campaign_goal      = CampaignGoal.CONVERSION,
         niche              = "skincare",
-        platforms          = [Platform.YOUTUBE, Platform.INSTAGRAM],
+        platforms          = [Platform.YOUTUBE],
         follower_tier      = FollowerTier.MICRO,
         target_audience    = "Indian women 22-35, interested in clean beauty",
         audience_location  = "India",

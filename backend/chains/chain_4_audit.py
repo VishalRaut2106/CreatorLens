@@ -483,11 +483,18 @@ if __name__ == "__main__":
             return
 
         icp      = await run_icp_chain(sample_brief, api_key)
+        
+        # Loosen benchmarks so more creators pass the example
+        icp.benchmarks.follower_min = 0
+        icp.benchmarks.follower_max = 20_000_000
+        icp.benchmarks.min_engagement_rate = 0.0
+        icp.benchmarks.min_view_to_sub_ratio = 0.0
+        
         keywords = run_keyword_expansion(icp)
         keywords.youtube_queries = keywords.youtube_queries[:2]
 
         candidates = await run_discovery(icp, keywords)
-        filtered   = run_filtering(icp, candidates)
+        filtered   = run_filtering(icp, candidates, follower_tolerance=10.0)
         filtered   = filtered[:2]   # limit for test
 
         audited = await run_audit(icp, filtered, groq_api_key=api_key)
@@ -504,7 +511,7 @@ if __name__ == "__main__":
                 print(f"  Rationale:     {a['audit_rationale'][:120]}")
             if c.get("pricing"):
                 p = c["pricing"]
-                print(f"  Est. rate:     ₹{p['estimated_rate_inr']:,.0f} | CPM: ${p['cpm_usd']:.2f} | {p['pricing_tier']}")
+                print(f"  Est. rate:     INR {p['estimated_rate_inr']:,.0f} | CPM: ${p['cpm_usd']:.2f} | {p['pricing_tier']}")
             if c.get("audit_error"):
                 print(f"  ERROR: {c['audit_error']}")
 

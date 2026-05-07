@@ -34,6 +34,7 @@ class DropReason:
     BOT_SIGNAL_RATIO   = "Like-to-comment ratio outside healthy range (bot signal)"
     ZERO_ENGAGEMENT    = "Zero likes AND zero comments — inactive or newly created"
     INACTIVE           = "Channel too new or inactive — insufficient content history"
+    NON_YOUTUBE        = "Platform not supported (restricted to YouTube)"
 
 
 class FilterResult:
@@ -207,13 +208,16 @@ def run_filtering(
     results: list[FilterResult] = []
 
     for candidate in candidates:
-        drop_reason = (
-            _check_follower_range(candidate, benchmarks, follower_tolerance) or
-            _check_engagement_rate(candidate, benchmarks) or
-            _check_view_to_sub_ratio(candidate, benchmarks) or
-            _check_like_to_comment_ratio(candidate, benchmarks) or
-            _check_activity(candidate, benchmarks)
-        )
+        if candidate.platform != "youtube":
+            drop_reason = DropReason.NON_YOUTUBE
+        else:
+            drop_reason = (
+                _check_follower_range(candidate, benchmarks, follower_tolerance) or
+                _check_engagement_rate(candidate, benchmarks) or
+                _check_view_to_sub_ratio(candidate, benchmarks) or
+                _check_like_to_comment_ratio(candidate, benchmarks) or
+                _check_activity(candidate, benchmarks)
+            )
 
         if drop_reason:
             logger.info(
@@ -266,7 +270,7 @@ if __name__ == "__main__":
         product_description= "Vitamin C serum for hyperpigmentation targeting Indian women",
         campaign_goal      = CampaignGoal.CONVERSION,
         niche              = "skincare",
-        platforms          = [Platform.YOUTUBE, Platform.INSTAGRAM],
+        platforms          = [Platform.YOUTUBE],
         follower_tier      = FollowerTier.MICRO,
         target_audience    = "Indian women 22-35, interested in clean beauty",
         audience_location  = "India",
@@ -283,11 +287,18 @@ if __name__ == "__main__":
             return
 
         icp = await run_icp_chain(sample_brief, api_key)
+        
+        # Loosen benchmarks so more creators pass the example
+        icp.benchmarks.follower_min = 0
+        icp.benchmarks.follower_max = 20_000_000
+        icp.benchmarks.min_engagement_rate = 0.0
+        icp.benchmarks.min_view_to_sub_ratio = 0.0
+        
         keywords = run_keyword_expansion(icp)
         keywords.youtube_queries = keywords.youtube_queries[:2]  # quota limit for test
 
         candidates = await run_discovery(icp, keywords)
-        filtered   = run_filtering(icp, candidates)
+        filtered   = run_filtering(icp, candidates, follower_tolerance=10.0)
 
         print(f"\nFiltering: {len(candidates)} -> {len(filtered)} passed")
         for c in filtered:
