@@ -122,10 +122,9 @@ async def run_pipeline(
     keywords = run_keyword_expansion(icp)
     timings["chain_1_keywords"] = round(time.time() - t0, 2)
     logger.info(
-        "Chain 1 done (%.1fs). %d YT queries | %d Tavily queries | Est. quota: %d",
+        "Chain 1 done (%.1fs). %d YT queries | Est. quota: %d",
         timings["chain_1_keywords"],
         len(keywords.youtube_queries),
-        len(keywords.all_tavily_queries),
         keywords.estimated_quota_cost,
     )
 
@@ -246,18 +245,18 @@ if __name__ == "__main__":
     )
 
     sample_brief = BrandBrief(
-        brand_name         = "Dot & Key",
-        product_description= "Vitamin C serum for hyperpigmentation targeting Indian women",
-        campaign_goal      = CampaignGoal.CONVERSION,
-        niche              = "skincare",
+        brand_name         = "Notion",
+        product_description= "All-in-one workspace for notes, project management, and task tracking",
+        campaign_goal      = CampaignGoal.AWARENESS,
+        niche              = "productivity",
         platforms          = [Platform.YOUTUBE],
-        follower_tier      = FollowerTier.MICRO,
-        target_audience    = "Indian women 22-35, interested in clean beauty",
-        audience_location  = "India",
-        audience_age_range = "22-35",
-        language           = "English and Hindi",
-        competitor_brands  = ["Minimalist", "Plum", "Derma Co"],
-        excluded_niches    = ["adult content", "alcohol", "gambling"],
+        follower_tier      = FollowerTier.MACRO,
+        target_audience    = "Students, professionals, and tech enthusiasts",
+        audience_location  = "United States",
+        audience_age_range = "18-35",
+        language           = "English",
+        competitor_brands  = ["Evernote", "Roam Research", "Obsidian"],
+        excluded_niches    = ["adult content", "gambling"],
     )
 
     async def main():

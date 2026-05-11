@@ -81,6 +81,9 @@ class RawCreatorProfile(BaseModel):
     recent_videos:        list[dict] = Field(default_factory=list)
     recent_video_titles:  list[str]  = Field(default_factory=list)
 
+    # Recent audience comments — used by Chain 4 for authenticity audit
+    recent_comments:      list[str]  = Field(default_factory=list)
+
     # Source metadata
     discovery_source: Literal[
         "youtube_video_search",
@@ -152,6 +155,7 @@ def _dict_to_profile(raw: dict, source: str) -> RawCreatorProfile | None:
         like_to_comment_ratio=raw.get("like_to_comment_ratio"),
         recent_videos=raw.get("recent_videos", []),
         recent_video_titles=raw.get("recent_video_titles", []),
+        recent_comments=raw.get("recent_comments", []),
         discovery_source=source,
     )
 
@@ -203,7 +207,11 @@ async def _discover_youtube(keywords: ExpandedKeywordSet) -> list[RawCreatorProf
         return []
 
     # Batch-fetch all profiles (FIX: 1 API call instead of N)
-    raw_profiles = await build_channel_profiles_batch(list(unique_channel_ids.keys()))
+    try:
+        raw_profiles = await build_channel_profiles_batch(list(unique_channel_ids.keys()))
+    except Exception as e:
+        logger.error("Catastrophic failure during batch profile fetch: %s", e)
+        return []
 
     profiles: list[RawCreatorProfile] = []
     for raw in raw_profiles:
@@ -224,13 +232,13 @@ async def _discover_youtube(keywords: ExpandedKeywordSet) -> list[RawCreatorProf
 
 def _deduplicate(profiles: list[RawCreatorProfile]) -> list[RawCreatorProfile]:
     """
-    Deduplicate by handle — case-insensitive.
+    Deduplicate by channel_id to avoid collisions with non-unique handles/titles.
     Priority: "real" data_confidence wins over "estimated".
     """
     seen: dict[str, RawCreatorProfile] = {}
 
     for p in profiles:
-        key = p.handle.lower().lstrip("@")
+        key = p.channel_id if p.channel_id else p.handle.lower().lstrip("@")
         existing = seen.get(key)
 
         if existing is None:

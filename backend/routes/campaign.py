@@ -8,7 +8,7 @@ from models.schemas import BrandBrief, CampaignResponse, JobStatus
 from db.database import create_job, get_job, get_conn
 from services.pipeline import execute_pipeline
 from services.outreach import draft_outreach
-from services.platforms.tavily import find_competitor_influencers
+from services.platforms.instagram import find_competitor_influencers
 import uuid
 import json
 

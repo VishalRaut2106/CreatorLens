@@ -43,8 +43,10 @@ DAILY_QUOTA_LIMIT     = 10_000   # default Google Cloud quota
 # How many YouTube results to pull per query
 YT_RESULTS_PER_QUERY = 10
 
+import datetime
+
 # Recency modifier — added to queries to surface recent content
-RECENCY_YEAR = "2025"
+RECENCY_YEAR = str(datetime.date.today().year)
 
 # Location modifiers for geo-targeted campaigns
 LOCATION_MODIFIERS: dict[str, list[str]] = {
@@ -76,32 +78,12 @@ class YouTubeQuery(BaseModel):
     @field_validator("query")
     @classmethod
     def query_must_be_specific(cls, v: str) -> str:
-        if len(v.split()) < 3:
+        if len(v.split()) < 2:
             raise ValueError(
                 f"YouTube query too short ('{v}'). "
-                "Queries must be at least 3 words to be topically specific."
+                "Queries must be at least 2 words to be topically specific."
             )
         return v.strip()
-
-
-class TavilyQuery(BaseModel):
-    """
-    A single formatted query for the Tavily Search API.
-    Uses Boolean operators: OR, AND, site:, quotes for exact phrases.
-    Chain 2 sends these to Tavily's /search endpoint.
-    """
-    query:          str
-    purpose:        Literal["discovery", "competitor", "audience_intent"]
-    search_depth:   Literal["basic", "advanced"] = "advanced"
-    max_results:    int = 5
-    # Tavily supports include_domains / exclude_domains
-    include_domains: list[str] = Field(default_factory=list)
-    exclude_domains: list[str] = Field(default_factory=list)
-
-
-class HashtagSet(BaseModel):
-    """Hashtags extracted from ICP for use in discovery queries."""
-    raw:        list[str]  # without # — used in query construction
 
 
 class ExpandedKeywordSet(BaseModel):
@@ -111,17 +93,9 @@ class ExpandedKeywordSet(BaseModel):
 
     Structure:
       youtube_queries       → passed to youtube.py  (Chain 2)
-      tavily_discovery      → passed to tavily.py   (Chain 2) for creator discovery
-      tavily_competitor     → passed to tavily.py   (Chain 2) for competitor intel
-      tavily_audience       → passed to tavily.py   (Chain 2) for audience-intent search
-      hashtags              → used in Tavily Instagram Boolean queries
       estimated_quota_cost  → logged before execution so we know if we'll hit limits
     """
     youtube_queries:        list[YouTubeQuery]
-    tavily_discovery:       list[TavilyQuery]
-    tavily_competitor:      list[TavilyQuery]
-    tavily_audience:        list[TavilyQuery]
-    hashtags:               HashtagSet
 
     # Metadata
     total_youtube_queries:      int
@@ -131,10 +105,6 @@ class ExpandedKeywordSet(BaseModel):
     @property
     def will_exceed_quota(self) -> bool:
         return self.estimated_quota_cost > DAILY_QUOTA_LIMIT
-
-    @property
-    def all_tavily_queries(self) -> list[TavilyQuery]:
-        return self.tavily_discovery + self.tavily_competitor + self.tavily_audience
 
 
 # ─────────────────────────────────────────────
@@ -194,9 +164,11 @@ class YouTubeQueryFormatter:
         return "en"
 
     def _append_location(self, query: str) -> str:
-        """Append location modifier only if not already present in the query."""
-        if self.location_mod and self.location_mod.lower() not in query.lower():
-            return f"{query} {self.location_mod}"
+        """
+        Location is now handled exclusively by region_code and relevance_language
+        passed to the YouTube API. We no longer append text locations (e.g. 'India')
+        to avoid over-constraining the YouTube search algorithm.
+        """
         return query
 
     def format(self) -> list[YouTubeQuery]:
@@ -259,135 +231,6 @@ class YouTubeQueryFormatter:
         return queries
 
 
-class TavilyQueryFormatter:
-    """
-    Converts ICP keyword buckets → Tavily Boolean search strings.
-
-    Tavily supports:
-      - Quoted exact phrases: "gifted by brand"
-      - OR: keyword1 OR keyword2
-      - site: operator for platform-specific search
-      - Domains include/exclude
-
-    Generates platform-agnostic web discovery queries.
-    """
-
-    def __init__(self, icp: ICPProfile):
-        self.icp = icp
-
-    def _format_discovery_queries(self) -> list[TavilyQuery]:
-        """
-        Discovery queries: find creator profiles and content
-        using Boolean queries. Platform-agnostic web search.
-        """
-        queries: list[TavilyQuery] = []
-        niches = self.icp.primary_niches
-
-        for raw_q in self.icp.keyword_buckets.discovery[:5]:   # top 5
-            # General creator discovery (no site: restriction)
-            web_query = (
-                f'"{raw_q}" '
-                f'("collab" OR "gifted" OR "ad" OR "review") '
-                f'creator OR influencer'
-            )
-            queries.append(TavilyQuery(
-                query=web_query,
-                purpose="discovery",
-                max_results=5,
-            ))
-
-        # Niche-authority queries: creators who self-identify
-        for niche in niches[:2]:
-            bio_query = (
-                f'"{niche} creator" OR "{niche} influencer" OR "{niche} blogger" '
-                f'{self.icp.audience.location}'
-            )
-            queries.append(TavilyQuery(
-                query=bio_query,
-                purpose="discovery",
-                max_results=8,
-            ))
-
-        return queries
-
-    def _format_competitor_queries(self) -> list[TavilyQuery]:
-        """
-        Competitor queries: find creators who are confirmed ambassadors
-        of competing brands. These are 'proven performers' in the vertical.
-        """
-        queries: list[TavilyQuery] = []
-
-        for comp_q in self.icp.keyword_buckets.competitor:
-            # Find confirmed brand deals
-            deal_query = (
-                f'{comp_q} '
-                f'("brand ambassador" OR "brand partner" OR "#gifted" OR "#ad")'
-            )
-            queries.append(TavilyQuery(
-                query=deal_query,
-                purpose="competitor",
-                max_results=8,
-                search_depth="advanced",
-            ))
-
-            # Find press / round-up articles that list their ambassadors
-            press_query = f'{comp_q} influencer campaign ambassador list'
-            queries.append(TavilyQuery(
-                query=press_query,
-                purpose="competitor",
-                max_results=5,
-            ))
-
-        return queries
-
-    def _format_audience_intent_queries(self) -> list[TavilyQuery]:
-        """
-        Audience intent queries: what does the TARGET AUDIENCE search for?
-        These find creators who are answering real audience questions —
-        the most reliable signal of niche authority and genuine engagement.
-        """
-        queries: list[TavilyQuery] = []
-
-        for raw_q in self.icp.keyword_buckets.audience_intent:
-            # Find who Google thinks answers this query — those are the topical leaders
-            queries.append(TavilyQuery(
-                query=raw_q,
-                purpose="audience_intent",
-                max_results=5,
-                search_depth="advanced",
-            ))
-
-        return queries
-
-    def format_discovery(self) -> list[TavilyQuery]:
-        return self._format_discovery_queries()
-
-    def format_competitor(self) -> list[TavilyQuery]:
-        return self._format_competitor_queries()
-
-    def format_audience(self) -> list[TavilyQuery]:
-        return self._format_audience_intent_queries()
-
-
-class HashtagFormatter:
-    """
-    Formats ICP hashtags for use in discovery queries.
-
-    Raw hashtags from ICP look like: "#skincareIndia", "#VitaminCSerum"
-    We store them without # for query construction.
-    """
-
-    def __init__(self, icp: ICPProfile):
-        self.icp = icp
-
-    def _clean(self, tag: str) -> str:
-        """Strip # and lowercase for query use."""
-        return re.sub(r"^#+", "", tag).strip()
-
-    def format(self) -> HashtagSet:
-        raw_tags = [self._clean(t) for t in self.icp.hashtags]
-        return HashtagSet(raw=raw_tags)
-
 
 # ─────────────────────────────────────────────
 # QUOTA MANAGEMENT
@@ -422,16 +265,10 @@ def run_keyword_expansion(icp: ICPProfile) -> ExpandedKeywordSet:
     logger.info("Chain 1 starting for niches=%s location=%s",
                 icp.primary_niches, icp.audience.location)
 
-    # Run all three formatters
+    # Run YouTube formatter
     yt_formatter       = YouTubeQueryFormatter(icp)
-    tavily_formatter   = TavilyQueryFormatter(icp)
-    hashtag_formatter  = HashtagFormatter(icp)
 
     youtube_queries    = yt_formatter.format()
-    tavily_discovery   = tavily_formatter.format_discovery()
-    tavily_competitor  = tavily_formatter.format_competitor()
-    tavily_audience    = tavily_formatter.format_audience()
-    hashtags           = hashtag_formatter.format()
 
     # Quota accounting
     est_quota = estimate_quota_cost(youtube_queries, n_candidates=25)
@@ -446,20 +283,14 @@ def run_keyword_expansion(icp: ICPProfile) -> ExpandedKeywordSet:
 
     result = ExpandedKeywordSet(
         youtube_queries=youtube_queries,
-        tavily_discovery=tavily_discovery,
-        tavily_competitor=tavily_competitor,
-        tavily_audience=tavily_audience,
-        hashtags=hashtags,
         total_youtube_queries=len(youtube_queries),
         estimated_quota_cost=est_quota,
         quota_budget_remaining_pct=round(100 - quota_pct, 1),
     )
 
     logger.info(
-        "Chain 1 complete: %d YT queries, %d Tavily discovery, "
-        "%d Tavily competitor, %d Tavily audience. Est. quota: %d units (%.1f%% of daily limit)",
-        len(youtube_queries), len(tavily_discovery),
-        len(tavily_competitor), len(tavily_audience),
+        "Chain 1 complete: %d YT queries. Est. quota: %d units (%.1f%% of daily limit)",
+        len(youtube_queries),
         est_quota, quota_pct,
     )
 
@@ -521,16 +352,7 @@ if __name__ == "__main__":
         for i, q in enumerate(keywords.youtube_queries, 1):
             print(f"  {i:02d}. [{q.purpose:15}] [{q.search_type}] {q.query}")
 
-        print("\n== TAVILY DISCOVERY ==")
-        for i, q in enumerate(keywords.tavily_discovery, 1):
-            print(f"  {i:02d}. {q.query[:90]}")
 
-        print("\n== TAVILY COMPETITOR ==")
-        for i, q in enumerate(keywords.tavily_competitor, 1):
-            print(f"  {i:02d}. {q.query[:90]}")
-
-        print("\n== HASHTAGS ==")
-        print("  ", " ".join(keywords.hashtags.raw[:10]))
 
         print(f"\n== QUOTA ==")
         print(f"  Estimated cost : {keywords.estimated_quota_cost} units")

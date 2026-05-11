@@ -232,6 +232,44 @@ async def youtube_video_stats_batch(video_ids: list[str]) -> list[dict]:
     return results
 
 
+async def youtube_channel_comments(channel_id: str, max_comments: int = 15) -> list[str]:
+    """
+    Fetch top-level comments across all videos for a channel.
+    Cost: 1 unit per call.
+    """
+    if not channel_id:
+        return []
+    try:
+        async with httpx.AsyncClient() as client:
+            data = await _get_with_retry(
+                client,
+                "https://www.googleapis.com/youtube/v3/commentThreads",
+                {
+                    "key": _api_key(),
+                    "allThreadsRelatedToChannelId": channel_id,
+                    "part": "snippet",
+                    "maxResults": min(max_comments, 100),
+                    "order": "time",
+                },
+            )
+        comments = []
+        for item in data.get("items", []):
+            snippet = item.get("snippet", {}).get("topLevelComment", {}).get("snippet", {})
+            text = snippet.get("textOriginal", "")
+            if text:
+                comments.append(text)
+        return comments
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (403, 400, 404):
+            logger.warning("Comments disabled or forbidden for channel %s", channel_id)
+            return []
+        logger.error("youtube_channel_comments failed for channel %s: %s", channel_id, e)
+        return []
+    except Exception as e:
+        logger.error("youtube_channel_comments failed for channel %s: %s", channel_id, e)
+        return []
+
+
 # ─────────────────────────────────────────────
 # MEDIAN HELPER
 # ─────────────────────────────────────────────
@@ -371,6 +409,9 @@ async def build_channel_profile(channel_id: str, raw_data: dict | None = None) -
                     channel_title, f"{subscribers:,}", f"{int(median_views):,}", median_er,
                 )
 
+    # Fetch recent comments
+    recent_comments = await youtube_channel_comments(channel_id, max_comments=15)
+
     # Step 3: Fallback engagement estimate if no videos available
     if engagement_source == "estimated" and subscribers > 0:
         if   subscribers >= 10_000_000: base = 1.2
@@ -426,6 +467,9 @@ async def build_channel_profile(channel_id: str, raw_data: dict | None = None) -
         # Recent videos with titles (used by Chain 4 for niche relevance)
         "recent_videos":   recent_videos_data,
         "recent_video_titles": [v["title"] for v in recent_videos_data],
+        
+        # Recent comments (used by Chain 4 for authenticity audit)
+        "recent_comments": recent_comments,
     }
 
 

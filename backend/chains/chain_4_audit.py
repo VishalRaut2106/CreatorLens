@@ -196,6 +196,7 @@ Your job: evaluate a creator candidate against the ICP and assign precise scores
    If median_er is below min → "below_benchmark"
 4. If brand_safety_tier1_findings is non-empty → tier1_triggered = true, risk_level = "high_risk".
 5. If like_to_comment_ratio > 100 or == null with likes > 50 → set authenticity_score ≤ 0.3.
+   Also evaluate the recent comments. If the majority are copy-paste, generic 'nice video', or emoji-only, aggressively lower the authenticity_score. Use the comments and creator location to verify if the audience demographics and language match the brand's target audience.
 6. base the top_content_type on their recent video titles, not just categories.
 7. CRITICAL: For numeric fields (floats), output raw numbers ONLY (e.g., 0.5, 0.0). DO NOT append '%' and DO NOT output `null`. If a value is unknown, estimate it based on available context or default to 0.0.
 """
@@ -221,6 +222,9 @@ Channel context:
 
 Recent video titles (for niche relevance):
 {recent_video_titles}
+
+Recent Audience Comments (for authenticity & sentiment audit):
+{recent_comments}
 
 ## ICP Context
 Primary niches: {primary_niches}
@@ -341,6 +345,11 @@ async def audit_one_candidate(
         f"  - {t}" for t in (candidate.recent_video_titles or [])[:10]
     ) or "No video titles available"
 
+    # Prepare comments for authenticity
+    comments_str = "\n".join(
+        f"  - {c}" for c in (candidate.recent_comments or [])[:15]
+    ) or "No recent comments available"
+
     prompt_vars: dict[str, Any] = {
         "handle":              handle,
         "platform":            candidate.platform,
@@ -360,6 +369,7 @@ async def audit_one_candidate(
         "topic_categories":    ", ".join(candidate.topic_categories or []),
         "channel_keywords":    candidate.channel_keywords or "none",
         "recent_video_titles": titles_str,
+        "recent_comments":     comments_str,
 
         "primary_niches":      ", ".join(icp.primary_niches),
         "target_audience":     (

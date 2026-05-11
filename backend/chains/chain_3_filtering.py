@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from chain_0_ICP import ICPProfile
+from chain_0_ICP import ICPProfile, PerformanceBenchmarks
 from chain_2_discovery import RawCreatorProfile
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class FilterResult:
 
 def _check_follower_range(
     candidate: RawCreatorProfile,
-    benchmarks,
+    benchmarks: PerformanceBenchmarks,
     tolerance: float = 0.5,
 ) -> str | None:
     """
@@ -68,7 +68,7 @@ def _check_follower_range(
 
 def _check_engagement_rate(
     candidate: RawCreatorProfile,
-    benchmarks,
+    benchmarks: PerformanceBenchmarks,
 ) -> str | None:
     """
     Compare ER against tier-relative minimum benchmark.
@@ -84,7 +84,7 @@ def _check_engagement_rate(
 
 def _check_view_to_sub_ratio(
     candidate: RawCreatorProfile,
-    benchmarks,
+    benchmarks: PerformanceBenchmarks,
 ) -> str | None:
     """
     View-to-subscriber ratio below 5% = dead channel.
@@ -104,7 +104,7 @@ def _check_view_to_sub_ratio(
 
 def _check_like_to_comment_ratio(
     candidate: RawCreatorProfile,
-    benchmarks,
+    benchmarks: PerformanceBenchmarks,
 ) -> str | None:
     """
     Like-to-comment ratio outside healthy range signals bot activity.
@@ -140,7 +140,7 @@ def _check_like_to_comment_ratio(
 
 def _check_activity(
     candidate: RawCreatorProfile,
-    benchmarks,
+    benchmarks: PerformanceBenchmarks,
 ) -> str | None:
     """
     Check that the channel is active enough to be worth pursuing.
@@ -156,16 +156,17 @@ def _check_activity(
     if candidate.data_confidence != "real":
         return None
 
-    age = candidate.channel_age_years or 0
+    age = candidate.channel_age_years
     recent_video_count = len(candidate.recent_videos)
 
-    # Channel older than 1 year but no recent videos pulled = very inactive
-    if age > 1.0 and recent_video_count == 0:
-        return DropReason.INACTIVE
+    if age is not None:
+        # Channel older than 1 year but no recent videos pulled = very inactive
+        if age > 1.0 and recent_video_count == 0:
+            return DropReason.INACTIVE
 
-    # Channel too new to have a content track record
-    if age < 0.25 and recent_video_count < 3:
-        return DropReason.INACTIVE
+        # Channel too new to have a content track record
+        if age < 0.25 and recent_video_count < 3:
+            return DropReason.INACTIVE
 
     return None
 
