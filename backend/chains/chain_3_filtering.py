@@ -1,12 +1,10 @@
 """
-Chain 3 — Filtering
-====================
+Chain 3 — Filtering  (YouTube-only)
+====================================
 Improvements over previous version:
   FIX  BUG     : Zero avg_likes AND avg_comments no longer passes — channels with
                  no engagement data are flagged, not silently approved.
   FIX  MISSING : Activity check added using channel_age_years + video_count proxy.
-  FIX  MISSING : Estimated profiles (Instagram/Twitter) use relaxed follower check
-                 since their follower count may be None or imprecise.
   FIX  MINOR   : Removed benchmark mutation in test — use override params instead.
   REMOVED      : Follower growth spike check — not feasible from static API data.
                  Noted in comments so Chain 4 knows it isn't guaranteed.
@@ -34,7 +32,6 @@ class DropReason:
     BOT_SIGNAL_RATIO   = "Like-to-comment ratio outside healthy range (bot signal)"
     ZERO_ENGAGEMENT    = "Zero likes AND zero comments — inactive or newly created"
     INACTIVE           = "Channel too new or inactive — insufficient content history"
-    NON_YOUTUBE        = "Platform not supported (restricted to YouTube)"
 
 
 class FilterResult:
@@ -57,16 +54,11 @@ def _check_follower_range(
 ) -> str | None:
     """
     Check follower count against ICP tier range with ±50% tolerance.
-
-    FIX: Estimated profiles (Instagram/Twitter) with followers=None skip
-         this check — we cannot reliably filter on a scraped number.
     """
     if candidate.followers is None:
-        if candidate.data_confidence == "estimated":
-            return None   # Can't enforce follower filter without reliable data
         return DropReason.FOLLOWER_RANGE  # Real profile with no followers = drop
 
-    f_min = int(benchmarks.follower_min * tolerance)
+    f_min = max(0, int(benchmarks.follower_min * (1 - tolerance)))
     f_max = int(benchmarks.follower_max * (1 + tolerance))
 
     if not (f_min <= candidate.followers <= f_max):
@@ -80,11 +72,7 @@ def _check_engagement_rate(
 ) -> str | None:
     """
     Compare ER against tier-relative minimum benchmark.
-    Only enforced for real data. Estimated profiles skip this.
     """
-    if candidate.data_confidence == "estimated":
-        return None   # No reliable ER for Instagram/Twitter profiles
-
     er = candidate.engagement_rate
     if er is None:
         return None   # No data — let Chain 4 decide
@@ -100,9 +88,9 @@ def _check_view_to_sub_ratio(
 ) -> str | None:
     """
     View-to-subscriber ratio below 5% = dead channel.
-    Only applies to YouTube real data.
+    Only applies to real data.
     """
-    if candidate.platform != "youtube" or candidate.data_confidence != "real":
+    if candidate.data_confidence != "real":
         return None
 
     ratio = candidate.view_to_sub_ratio
@@ -121,16 +109,16 @@ def _check_like_to_comment_ratio(
     """
     Like-to-comment ratio outside healthy range signals bot activity.
 
-    FIX: Also catches the case where BOTH avg_likes AND avg_comments are 0
-         — this is not a healthy channel, it's an inactive one.
+    Also catches the case where BOTH avg_likes AND avg_comments are 0
+    — this is not a healthy channel, it's an inactive one.
     """
-    if candidate.platform != "youtube" or candidate.data_confidence != "real":
+    if candidate.data_confidence != "real":
         return None
 
     avg_likes    = candidate.avg_likes    or 0
     avg_comments = candidate.avg_comments or 0
 
-    # FIX BUG: Both zero = no engagement data = suspicious / inactive
+    # Both zero = no engagement data = suspicious / inactive
     if avg_likes == 0 and avg_comments == 0:
         return DropReason.ZERO_ENGAGEMENT
 
@@ -157,16 +145,15 @@ def _check_activity(
     """
     Check that the channel is active enough to be worth pursuing.
 
-    FIX MISSING: Previous version checked min_posts_per_month but that field
-    wasn't in the candidate data. We now use a proxy:
+    Proxy rules:
       - Channel age < 3 months with < 3 videos = too new to evaluate
       - Channel age > 1 year with 0 recent videos = inactive
 
     NOTE: Follower growth spike detection (>20%/month) is NOT feasible from
-    static YouTube API data — historical subscriber counts aren't exposed.
+    static YouTube API data — historical subscriber counts aren’t exposed.
     This would require Social Blade or a paid data provider.
     """
-    if candidate.platform != "youtube" or candidate.data_confidence != "real":
+    if candidate.data_confidence != "real":
         return None
 
     age = candidate.channel_age_years or 0
@@ -208,16 +195,13 @@ def run_filtering(
     results: list[FilterResult] = []
 
     for candidate in candidates:
-        if candidate.platform != "youtube":
-            drop_reason = DropReason.NON_YOUTUBE
-        else:
-            drop_reason = (
-                _check_follower_range(candidate, benchmarks, follower_tolerance) or
-                _check_engagement_rate(candidate, benchmarks) or
-                _check_view_to_sub_ratio(candidate, benchmarks) or
-                _check_like_to_comment_ratio(candidate, benchmarks) or
-                _check_activity(candidate, benchmarks)
-            )
+        drop_reason = (
+            _check_follower_range(candidate, benchmarks, follower_tolerance) or
+            _check_engagement_rate(candidate, benchmarks) or
+            _check_view_to_sub_ratio(candidate, benchmarks) or
+            _check_like_to_comment_ratio(candidate, benchmarks) or
+            _check_activity(candidate, benchmarks)
+        )
 
         if drop_reason:
             logger.info(

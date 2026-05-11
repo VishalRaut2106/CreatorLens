@@ -1,14 +1,13 @@
 """
-Chain 2 — Discovery
-====================
+Chain 2 — Discovery  (YouTube-only)
+====================================
 Improvements over previous version:
   FIX  CRITICAL : Channel ID extraction bug fixed. YouTube search.list returns
                   kind=youtube#searchResult, not youtube#video. channelId must be
                   read from item["snippet"]["channelId"] for video results.
-  FIX  CRITICAL : Tavily discovery added — Instagram + Twitter now discovered.
   FIX  MISSING  : RawCreatorProfile Pydantic schema added — no more raw dicts.
-  FIX  MISSING  : Cross-platform deduplication by handle (case-insensitive).
-  FIX  MISSING  : data_confidence label propagated from each platform's client.
+  FIX  MISSING  : Deduplication by handle (case-insensitive).
+  FIX  MISSING  : data_confidence label propagated from YouTube client.
   FIX  MINOR    : batch profile builder used for YouTube (quota savings).
 """
 
@@ -29,7 +28,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from chain_0_ICP import ICPProfile, Platform
 from chain_1_keywordExpansion import ExpandedKeywordSet
 from services.platforms.youtube import youtube_search, build_channel_profiles_batch
-from services.platforms.tavily import discover_social_from_queries
 
 logger = logging.getLogger(__name__)
 
@@ -40,24 +38,24 @@ logger = logging.getLogger(__name__)
 
 class RawCreatorProfile(BaseModel):
     """
-    Standardised creator profile produced by Chain 2.
+    Standardised YouTube creator profile produced by Chain 2.
     Every downstream chain reads from this — no raw dict access.
 
     data_confidence:
       "real"      = sourced from YouTube Data API (exact numbers)
-      "estimated" = sourced from Tavily web scraping (approximate)
+      "estimated" = fallback when API data is incomplete
     """
     # Identity
     handle:          str
-    platform:        Literal["youtube", "instagram", "twitter"]
+    platform:        Literal["youtube"] = "youtube"
     channel_title:   str = ""
     profile_url:     str
     data_confidence: Literal["real", "estimated"]
 
     # Audience size
-    followers:       int | None = None   # None = unknown (estimated profiles only)
+    followers:       int | None = None
 
-    # Channel metadata (YouTube-only, None for Instagram/Twitter)
+    # Channel metadata
     channel_id:          str | None = None
     description:         str | None = None
     country:             str | None = None
@@ -66,7 +64,7 @@ class RawCreatorProfile(BaseModel):
     topic_categories:    list[str] = Field(default_factory=list)
     channel_keywords:    str | None = None
 
-    # Engagement (real from API, or None for Instagram/Twitter)
+    # Engagement
     avg_views:           int | None = None
     avg_likes:           int | None = None
     avg_comments:        int | None = None
@@ -79,7 +77,7 @@ class RawCreatorProfile(BaseModel):
     view_to_sub_ratio:     float | None = None
     like_to_comment_ratio: float | None = None
 
-    # Recent video data (YouTube only — used by Chain 4 for niche relevance)
+    # Recent video data — used by Chain 4 for niche relevance
     recent_videos:        list[dict] = Field(default_factory=list)
     recent_video_titles:  list[str]  = Field(default_factory=list)
 
@@ -87,9 +85,6 @@ class RawCreatorProfile(BaseModel):
     discovery_source: Literal[
         "youtube_video_search",
         "youtube_channel_search",
-        "tavily_instagram",
-        "tavily_twitter",
-        "tavily_competitor",
     ]
 
 
@@ -161,21 +156,6 @@ def _dict_to_profile(raw: dict, source: str) -> RawCreatorProfile | None:
     )
 
 
-def _tavily_to_profile(raw: dict, source: str) -> RawCreatorProfile | None:
-    """Convert a Tavily-scraped profile dict into a typed RawCreatorProfile."""
-    handle = raw.get("handle", "")
-    if not handle:
-        return None
-    platform = raw.get("platform", "instagram")
-    return RawCreatorProfile(
-        handle=handle,
-        platform=platform,
-        profile_url=raw.get("profile_url", f"https://{platform}.com/{handle}"),
-        data_confidence="estimated",
-        followers=raw.get("followers"),   # May be None
-        engagement_source="estimated",
-        discovery_source=source,
-    )
 
 
 # ─────────────────────────────────────────────
@@ -237,83 +217,20 @@ async def _discover_youtube(keywords: ExpandedKeywordSet) -> list[RawCreatorProf
     return profiles
 
 
-# ─────────────────────────────────────────────
-# INSTAGRAM / TWITTER DISCOVERY  (FIX CRITICAL MISSING)
-# ─────────────────────────────────────────────
-
-async def _discover_instagram(keywords: ExpandedKeywordSet) -> list[RawCreatorProfile]:
-    """Use Tavily Boolean queries from Chain 1 to find Instagram creators."""
-    ig_queries = [
-        q.query for q in keywords.tavily_discovery
-        if "instagram.com" in q.query
-    ]
-    if not ig_queries:
-        return []
-
-    raw_profiles = await discover_social_from_queries(ig_queries, platform="instagram")
-
-    profiles = [
-        _tavily_to_profile(r, "tavily_instagram")
-        for r in raw_profiles
-    ]
-    valid = [p for p in profiles if p is not None]
-    logger.info("Instagram discovery: %d profiles", len(valid))
-    return valid
-
-
-async def _discover_twitter(keywords: ExpandedKeywordSet) -> list[RawCreatorProfile]:
-    """Use Tavily Boolean queries from Chain 1 to find Twitter/X creators."""
-    tw_queries = [
-        q.query for q in keywords.tavily_discovery
-        if "twitter.com" in q.query or "x.com" in q.query
-    ]
-    if not tw_queries:
-        return []
-
-    raw_profiles = await discover_social_from_queries(tw_queries, platform="twitter")
-
-    profiles = [
-        _tavily_to_profile(r, "tavily_twitter")
-        for r in raw_profiles
-    ]
-    valid = [p for p in profiles if p is not None]
-    logger.info("Twitter discovery: %d profiles", len(valid))
-    return valid
-
-
-async def _discover_competitors(keywords: ExpandedKeywordSet) -> list[RawCreatorProfile]:
-    """Use competitor queries to surface confirmed brand ambassadors."""
-    comp_queries = [q.query for q in keywords.tavily_competitor]
-    if not comp_queries:
-        return []
-
-    from services.platforms.tavily import discover_social_from_queries as _discover
-
-    profiles: list[RawCreatorProfile] = []
-    for platform in ("instagram", "youtube", "twitter"):
-        raw = await discover_social_from_queries(comp_queries[:3], platform=platform)
-        for r in raw:
-            profile = _tavily_to_profile(r, "tavily_competitor")
-            if profile:
-                profiles.append(profile)
-
-    logger.info("Competitor discovery: %d profiles", len(profiles))
-    return profiles
-
 
 # ─────────────────────────────────────────────
-# DEDUPLICATION  (FIX MISSING)
+# DEDUPLICATION
 # ─────────────────────────────────────────────
 
 def _deduplicate(profiles: list[RawCreatorProfile]) -> list[RawCreatorProfile]:
     """
-    Deduplicate by (platform, handle) — case-insensitive.
+    Deduplicate by handle — case-insensitive.
     Priority: "real" data_confidence wins over "estimated".
     """
-    seen: dict[tuple[str, str], RawCreatorProfile] = {}
+    seen: dict[str, RawCreatorProfile] = {}
 
     for p in profiles:
-        key = (p.platform, p.handle.lower().lstrip("@"))
+        key = p.handle.lower().lstrip("@")
         existing = seen.get(key)
 
         if existing is None:
@@ -339,41 +256,17 @@ async def run_discovery(
     """
     Chain 2 entry point. Called by pipeline.py after Chain 1 completes.
 
-    Runs YouTube, Instagram, Twitter, and competitor discovery in parallel.
-    Returns deduplicated list of RawCreatorProfile objects — no raw dicts.
+    Runs YouTube discovery and returns deduplicated RawCreatorProfile list.
     """
-    logger.info("Chain 2: Discovery starting (Restricted to YouTube)")
+    logger.info("Chain 2: YouTube discovery starting")
 
-    # Run platform discoveries (Restricted to YouTube for now)
-    results = await asyncio.gather(
-        _discover_youtube(keywords),
-        return_exceptions=True,
-    )
-    yt_profiles = results[0]
-    ig_profiles, tw_profiles, comp_profiles = [], [], []
+    yt_profiles = await _discover_youtube(keywords)
 
-    all_profiles: list[RawCreatorProfile] = []
-    for result, name in [
-        (yt_profiles,   "YouTube"),
-        (ig_profiles,   "Instagram"),
-        (tw_profiles,   "Twitter"),
-        (comp_profiles, "Competitor"),
-    ]:
-        if isinstance(result, Exception):
-            logger.error("%s discovery failed: %s", name, result)
-        else:
-            all_profiles.extend(result)
-
-    # Deduplicate across platforms
-    unique_profiles = _deduplicate(all_profiles)
+    unique_profiles = _deduplicate(yt_profiles)
 
     logger.info(
-        "Chain 2 complete: %d raw candidates (YT=%s, IG=%s, TW=%s, Comp=%s) → %d unique",
-        len(all_profiles),
-        len(yt_profiles)   if not isinstance(yt_profiles,   Exception) else "ERR",
-        len(ig_profiles)   if not isinstance(ig_profiles,   Exception) else "ERR",
-        len(tw_profiles)   if not isinstance(tw_profiles,   Exception) else "ERR",
-        len(comp_profiles) if not isinstance(comp_profiles, Exception) else "ERR",
+        "Chain 2 complete: %d raw → %d unique YouTube profiles",
+        len(yt_profiles),
         len(unique_profiles),
     )
 

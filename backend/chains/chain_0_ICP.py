@@ -296,13 +296,17 @@ that a junior analyst can use to shortlist creators without guesswork.
 3. Keyword buckets must be SPECIFIC and SEARCHABLE. \
    BAD: "fitness influencer" — too generic, matches 10 million results. \
    GOOD: "whey protein taste test honest opinion 2024" — topically precise.
-4. Competitor keyword bucket must include the exact brand name in each query \
+4. Tailor your discovery search queries to the content formats of the requested platforms: {platforms}.
+   - For YouTube: focus on "review", "how-to", "tutorial", "vlog", "haul", or "routine".
+   - For Instagram: focus on "reels", "aesthetic", "GRWM", or "quick routine".
+   - For Twitter/X: focus on "thread", "opinion", or "hot take".
+5. Competitor keyword bucket must include the exact brand name in each query \
    so Tavily can find confirmed ambassadors.
-5. The benchmarks section already has follower_min/max and ER values injected below. \
+6. The benchmarks section already has follower_min/max and ER values injected below. \
    Copy them verbatim into your output — do not invent your own numbers.
-6. Brand safety rules must be specific to this brand's category. \
+7. Brand safety rules must be specific to this brand's category. \
    A children's brand has stricter hard disqualifiers than an adult gaming brand.
-7. Scoring weights have been pre-calculated from the campaign goal. \
+8. Scoring weights have been pre-calculated from the campaign goal. \
    Copy them verbatim into your output.
 
 ## Pre-calculated values (copy these verbatim into benchmarks and scoring_weights)

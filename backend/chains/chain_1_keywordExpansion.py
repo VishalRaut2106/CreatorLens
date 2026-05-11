@@ -100,10 +100,8 @@ class TavilyQuery(BaseModel):
 
 
 class HashtagSet(BaseModel):
-    """Platform-tagged hashtags ready for Tavily Instagram/Twitter searches."""
-    instagram:  list[str]  # prefixed with # for display, raw for search
-    twitter:    list[str]
-    raw:        list[str]  # without # — used in Tavily site:instagram.com queries
+    """Hashtags extracted from ICP for use in discovery queries."""
+    raw:        list[str]  # without # — used in query construction
 
 
 class ExpandedKeywordSet(BaseModel):
@@ -271,72 +269,42 @@ class TavilyQueryFormatter:
       - site: operator for platform-specific search
       - Domains include/exclude
 
-    For Instagram/Twitter (no official API), this is our primary discovery tool.
-    We format queries as Boolean strings that surface creator profiles,
-    not just articles about creators.
+    Generates platform-agnostic web discovery queries.
     """
-
-    INSTAGRAM_DOMAINS = ["instagram.com"]
-    TWITTER_DOMAINS   = ["twitter.com", "x.com"]
 
     def __init__(self, icp: ICPProfile):
         self.icp = icp
 
-    def _platform_domains(self) -> list[str]:
-        """Which social domains to target based on ICP platforms."""
-        domains: list[str] = []
-        for p in self.icp.audience.top_interests:  # not platforms — use the actual field
-            pass
-        # Use the ICP's platform list from the original brief
-        # We'll construct per-platform queries separately
-        return []
-
     def _format_discovery_queries(self) -> list[TavilyQuery]:
         """
-        Discovery queries: find creator profiles on Instagram and Twitter
-        who post in the niche. Boolean format targets bio/post language.
+        Discovery queries: find creator profiles and content
+        using Boolean queries. Platform-agnostic web search.
         """
         queries: list[TavilyQuery] = []
         niches = self.icp.primary_niches
 
         for raw_q in self.icp.keyword_buckets.discovery[:5]:   # top 5
-            # Instagram creator discovery
-            ig_query = (
+            # General creator discovery (no site: restriction)
+            web_query = (
                 f'"{raw_q}" '
                 f'("collab" OR "gifted" OR "ad" OR "review") '
-                f'site:instagram.com'
+                f'creator OR influencer'
             )
             queries.append(TavilyQuery(
-                query=ig_query,
+                query=web_query,
                 purpose="discovery",
-                include_domains=self.INSTAGRAM_DOMAINS,
                 max_results=5,
             ))
 
-            # Twitter creator discovery
-            tw_query = (
-                f'"{raw_q}" '
-                f'(#ad OR #gifted OR #collab OR "sponsored") '
-                f'site:twitter.com OR site:x.com'
-            )
-            queries.append(TavilyQuery(
-                query=tw_query,
-                purpose="discovery",
-                include_domains=self.TWITTER_DOMAINS,
-                max_results=5,
-            ))
-
-        # Niche-authority queries: creators who self-identify in bio
+        # Niche-authority queries: creators who self-identify
         for niche in niches[:2]:
             bio_query = (
                 f'"{niche} creator" OR "{niche} influencer" OR "{niche} blogger" '
-                f'{self.icp.audience.location} '
-                f'site:instagram.com'
+                f'{self.icp.audience.location}'
             )
             queries.append(TavilyQuery(
                 query=bio_query,
                 purpose="discovery",
-                include_domains=self.INSTAGRAM_DOMAINS,
                 max_results=8,
             ))
 
@@ -403,13 +371,10 @@ class TavilyQueryFormatter:
 
 class HashtagFormatter:
     """
-    Formats ICP hashtags for use in Tavily Instagram/Twitter Boolean queries.
+    Formats ICP hashtags for use in discovery queries.
 
     Raw hashtags from ICP look like: "#skincareIndia", "#VitaminCSerum"
-    We need three forms:
-      - With #: for display in the UI
-      - Without #: for Tavily query construction
-      - Platform-prefixed sets for Chain 2 to use directly
+    We store them without # for query construction.
     """
 
     def __init__(self, icp: ICPProfile):
@@ -421,15 +386,7 @@ class HashtagFormatter:
 
     def format(self) -> HashtagSet:
         raw_tags = [self._clean(t) for t in self.icp.hashtags]
-
-        ig_tags  = [f"#{t}" for t in raw_tags]
-        tw_tags  = [f"#{t}" for t in raw_tags]
-
-        return HashtagSet(
-            instagram=ig_tags,
-            twitter=tw_tags,
-            raw=raw_tags,
-        )
+        return HashtagSet(raw=raw_tags)
 
 
 # ─────────────────────────────────────────────
@@ -462,8 +419,8 @@ def run_keyword_expansion(icp: ICPProfile) -> ExpandedKeywordSet:
     Synchronous — no I/O, no LLM call, runs in microseconds.
     Returns ExpandedKeywordSet ready for Chain 2.
     """
-    logger.info("Chain 1 starting for niches=%s platforms=%s",
-                icp.primary_niches, [p for p in icp.audience.location])
+    logger.info("Chain 1 starting for niches=%s location=%s",
+                icp.primary_niches, icp.audience.location)
 
     # Run all three formatters
     yt_formatter       = YouTubeQueryFormatter(icp)
@@ -547,7 +504,7 @@ if __name__ == "__main__":
         product_description= "Vitamin C serum for hyperpigmentation targeting Indian women",
         campaign_goal      = CampaignGoal.CONVERSION,
         niche              = "skincare",
-        platforms          = [Platform.INSTAGRAM, Platform.YOUTUBE],
+        platforms          = [Platform.YOUTUBE],
         follower_tier      = FollowerTier.MICRO,
         target_audience    = "Indian women 22–35, interested in clean beauty",
         audience_location  = "India",
@@ -572,8 +529,8 @@ if __name__ == "__main__":
         for i, q in enumerate(keywords.tavily_competitor, 1):
             print(f"  {i:02d}. {q.query[:90]}")
 
-        print("\n== HASHTAGS (Instagram) ==")
-        print("  ", " ".join(keywords.hashtags.instagram[:10]))
+        print("\n== HASHTAGS ==")
+        print("  ", " ".join(keywords.hashtags.raw[:10]))
 
         print(f"\n== QUOTA ==")
         print(f"  Estimated cost : {keywords.estimated_quota_cost} units")

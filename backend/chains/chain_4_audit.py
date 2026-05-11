@@ -33,7 +33,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from chain_0_ICP import ICPProfile
 from chain_2_discovery import RawCreatorProfile
-from services.platforms.tavily import three_tier_brand_safety_search
+from services.platforms.instagram import three_tier_brand_safety_search
 
 logger = logging.getLogger(__name__)
 
