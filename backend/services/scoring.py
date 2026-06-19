@@ -1,16 +1,23 @@
-"""
-scoring.py — Business logic for influencer scoring
-Contains pre-filtering, missing data estimation, keyword expansion,
-and LLM-based scoring.
-"""
-
+import httpx
 import json
-from services.llm_client import llm_chat, parse_json
+import os
+import re
+import asyncio
 
+# ── LLM Provider Config ──────────────────────────────────────
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter").lower()
 
-# ============================================================
-# SCORING SYSTEM PROMPT
-# ============================================================
+# Gemini config
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+
+# OpenRouter config
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+print(f"[SCORING] LLM provider: {LLM_PROVIDER.upper()}")
 
 SCORING_SYSTEM_PROMPT = """
 You are an influencer marketing analyst. Score each candidate on:
@@ -49,12 +56,102 @@ IMPORTANT: Every candidate must get a DIFFERENT composite_score. Do not give ide
 """
 
 
-# ============================================================
-# PRE-FILTER — Quick scoring before deep audit
-# ============================================================
+async def _ollama_chat(system: str, user: str) -> str:
+    """Call Ollama local LLM."""
+    payload = {
+        "model": OLLAMA_MODEL,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}
+        ]
+    }
+    async with httpx.AsyncClient(timeout=300) as client:
+        resp = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
+        resp.raise_for_status()
+        return resp.json()["message"]["content"].strip()
+
+
+async def _gemini_chat(system: str, user: str, retries: int = 2) -> str:
+    """Call Google Gemini API via REST with retry on 429."""
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is not set.")
+
+    models_to_try = [GEMINI_MODEL, "gemini-1.5-flash-latest", "gemini-1.0-pro"]
+
+    for model in models_to_try:
+        url = f"{GEMINI_BASE_URL}/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "system_instruction": {"parts": [{"text": system}]},
+            "contents": [{"parts": [{"text": user}]}],
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048}
+        }
+        for attempt in range(retries):
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(url, json=payload)
+                if resp.status_code == 429:
+                    wait = 5 * (attempt + 1)
+                    print(f"  [LLM] {model} 429, retrying in {wait}s...")
+                    await asyncio.sleep(wait)
+                    continue
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                break
+        else:
+            continue
+
+    raise Exception("All Gemini models rate limited.")
+
+
+async def _openrouter_chat(system: str, user: str) -> str:
+    """Call OpenRouter API (supports many free models)."""
+    if not OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY is not set.")
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            f"{OPENROUTER_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": OPENROUTER_MODEL,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+async def _llm_chat(system: str, user: str) -> str:
+    """Unified LLM router — tries OpenRouter first, falls back to Gemini."""
+    if LLM_PROVIDER == "openrouter":
+        try:
+            return await _openrouter_chat(system, user)
+        except Exception as e:
+            print(f"  [LLM] OpenRouter failed: {e}, falling back to Gemini...")
+    return await _gemini_chat(system, user)
+
+
+def _parse_json(raw: str):
+    try:
+        return json.loads(raw, strict=False)
+    except json.JSONDecodeError:
+        pass
+    clean = raw.replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(clean, strict=False)
+    except json.JSONDecodeError:
+        pass
+    clean = re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f]', '', clean)
+    return json.loads(clean, strict=False)
+
 
 def pre_filter_score(p):
-    """Quick score to decide which profiles are worth a deep audit."""
     followers = p.get("followers", 0)
     # The dictionary might have actual string values or numbers or be missing
     if not isinstance(followers, (int, float)):
@@ -104,14 +201,14 @@ def pre_filter_score(p):
     return score
 
 
-# ============================================================
-# FILL MISSING ESTIMATES — Fallback for missing data
-# ============================================================
-
+# -----------------------------------------------------------
+# Fallback estimator for missing agent data
+# -----------------------------------------------------------
 def fill_missing_estimates(profiles: list) -> list:
     """
-    When qualification or pricing agents fail (timeout, blocked, etc.),
-    fill in reasonable estimates so the dashboard doesn't show N/A everywhere.
+    When TinyFish qualification or pricing agents fail (timeout,
+    blocked, etc.), fill in reasonable estimates so the dashboard
+    doesn't show N/A everywhere.
     """
 
     # Industry-average engagement rates by platform
@@ -155,7 +252,7 @@ def fill_missing_estimates(profiles: list) -> list:
                 est = round(avg, 2)
             p["engagement_rate"] = est
             p["engagement_estimated"] = True
-            print(f"  [ESTIMATE] {p.get('handle')} engagement -> {est}% (estimated)")
+            print(f"  [ESTIMATE] {p.get('handle')} engagement → {est}% (estimated)")
 
         # ── Fill pricing ─────────────────────────────────────
         price_low  = p.get("price_low", 0) or 0
@@ -166,18 +263,13 @@ def fill_missing_estimates(profiles: list) -> list:
             p["price_low"]  = int(k * low_mult)
             p["price_high"] = int(k * high_mult)
             p["price_estimated"] = True
-            print(f"  [ESTIMATE] {p.get('handle')} pricing -> ${p['price_low']:,}-${p['price_high']:,} (estimated)")
+            print(f"  [ESTIMATE] {p.get('handle')} pricing → ${p['price_low']:,}–${p['price_high']:,} (estimated)")
 
     return profiles
 
 
-# ============================================================
-# LLM SCORING — Deep analysis via LLM
-# ============================================================
-
 async def score_influencers(enriched_profiles: list, brand_brief: dict) -> list:
-    """Score influencers using the LLM with the scoring rubric."""
-    # Score in batches of 5 to avoid LLM timeout
+    # Score in batches of 5 to avoid Ollama timeout
     BATCH_SIZE = 5
     all_scored = []
 
@@ -196,8 +288,8 @@ Score each candidate. Remember: every candidate must have a DIFFERENT composite_
 Return the JSON array.
 """
         try:
-            raw = await llm_chat(SCORING_SYSTEM_PROMPT, user_message)
-            scored = parse_json(raw)
+            raw = await _llm_chat(SCORING_SYSTEM_PROMPT, user_message)
+            scored = _parse_json(raw)
             all_scored.extend(scored)
         except Exception as e:
             print(f"  [SCORING] Batch {i // BATCH_SIZE + 1} failed: {e}")
@@ -221,51 +313,43 @@ Return the JSON array.
     return all_scored[:10]
 
 
-# ============================================================
-# KEYWORD EXPANSION — Template-based (no LLM needed)
-# ============================================================
-
 async def expand_keywords(brief: dict) -> list:
-    """
-    Generate search keywords from the brand brief without any LLM call.
-    Template-based approach: faster, free, zero rate-limit risk.
-    """
-    niche    = (brief.get('niche') or '').strip().lower()
-    audience = (brief.get('target_audience') or '').strip().lower()
+    user_message = f"""
+Given this brand brief, generate 5-8 search keywords to find relevant influencers.
+Return ONLY a JSON array of strings. No explanation.
 
-    # Extract first meaningful word from audience (e.g. "men 18-35 india" -> "men")
-    audience_word = ''
-    for word in audience.split():
-        if len(word) > 2 and not word.replace('-', '').isdigit():
-            audience_word = word
-            break
+Niche: {brief.get('niche')}
+Target audience: {brief.get('target_audience')}
+"""
+    raw = await _llm_chat("You are a helpful assistant.", user_message)
+    return _parse_json(raw)
 
-    templates = [
-        niche,
-        f"{niche} influencer",
-        f"{niche} creator",
-        f"best {niche} influencer",
-        f"{niche} youtuber",
-        f"{niche} content creator",
-    ]
 
-    if audience_word:
-        templates.append(f"{audience_word} {niche} influencer")
-        templates.append(f"{niche} for {audience_word}")
+async def draft_outreach(influencer: dict, brief: dict) -> str:
+    user_message = f"""
+Write a short outreach DM to @{influencer.get('handle')} on behalf of a brand.
 
-    # Also include any user-supplied keywords from the brief
-    user_keywords = brief.get('keywords') or []
-    all_keywords  = templates + [k for k in user_keywords if k not in templates]
+Brand details:
+- Niche: {brief.get('niche')}
+- Target audience: {brief.get('target_audience')}
+- Budget: ${brief.get('budget_min')}–${brief.get('budget_max')}
 
-    # Deduplicate and cap at 8
-    seen, result = set(), []
-    for kw in all_keywords:
-        kw = kw.strip()
-        if kw and kw not in seen:
-            seen.add(kw)
-            result.append(kw)
-        if len(result) >= 8:
-            break
+Influencer details:
+- Platform: {influencer.get('platform')}
+- Followers: {influencer.get('followers')}
+- Engagement rate: {influencer.get('engagement_rate')}%
+- About them: {influencer.get('ai_summary')}
 
-    print(f"  [KEYWORDS] Generated {len(result)} keywords: {result}")
-    return result
+Rules:
+- Max 80 words
+- Mention something SPECIFIC about their content or audience
+- Include the budget range naturally
+- End with a clear question to start conversation
+- Sound like a real human, not a template
+- No emojis, no corporate speak
+- Return ONLY the message, nothing else
+"""
+    return await _llm_chat(
+        "You are a brand partnerships manager who writes personalized, genuine outreach messages.",
+        user_message
+    )
