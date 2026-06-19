@@ -17,8 +17,6 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-print(f"[SCORING] LLM provider: {LLM_PROVIDER.upper()}")
-
 SCORING_SYSTEM_PROMPT = """
 You are an influencer marketing analyst. Score each candidate on:
 
@@ -54,22 +52,6 @@ Each object must have:
 
 IMPORTANT: Every candidate must get a DIFFERENT composite_score. Do not give identical scores.
 """
-
-
-async def _ollama_chat(system: str, user: str) -> str:
-    """Call Ollama local LLM."""
-    payload = {
-        "model": OLLAMA_MODEL,
-        "stream": False,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ]
-    }
-    async with httpx.AsyncClient(timeout=300) as client:
-        resp = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
-        resp.raise_for_status()
-        return resp.json()["message"]["content"].strip()
 
 
 async def _gemini_chat(system: str, user: str, retries: int = 2) -> str:
@@ -269,7 +251,7 @@ def fill_missing_estimates(profiles: list) -> list:
 
 
 async def score_influencers(enriched_profiles: list, brand_brief: dict) -> list:
-    # Score in batches of 5 to avoid Ollama timeout
+    # Score in batches of 5 to reduce timeout risk
     BATCH_SIZE = 5
     all_scored = []
 
@@ -314,15 +296,46 @@ Return the JSON array.
 
 
 async def expand_keywords(brief: dict) -> list:
-    user_message = f"""
-Given this brand brief, generate 5-8 search keywords to find relevant influencers.
-Return ONLY a JSON array of strings. No explanation.
+    """
+    Generate search keywords from the brand brief without any LLM call.
+    Template-based approach: faster, free, zero rate-limit risk.
+    """
+    niche = (brief.get("niche") or "").strip().lower()
+    audience = (brief.get("target_audience") or "").strip().lower()
 
-Niche: {brief.get('niche')}
-Target audience: {brief.get('target_audience')}
-"""
-    raw = await _llm_chat("You are a helpful assistant.", user_message)
-    return _parse_json(raw)
+    audience_word = ""
+    for word in audience.split():
+        if len(word) > 2 and not word.replace("-", "").isdigit():
+            audience_word = word
+            break
+
+    templates = [
+        niche,
+        f"{niche} influencer",
+        f"{niche} creator",
+        f"best {niche} influencer",
+        f"{niche} youtuber",
+        f"{niche} content creator",
+    ]
+
+    if audience_word:
+        templates.append(f"{audience_word} {niche} influencer")
+        templates.append(f"{niche} for {audience_word}")
+
+    user_keywords = brief.get("keywords") or []
+    all_keywords = templates + [k for k in user_keywords if k not in templates]
+
+    seen, result = set(), []
+    for kw in all_keywords:
+        kw = kw.strip()
+        if kw and kw not in seen:
+            seen.add(kw)
+            result.append(kw)
+        if len(result) >= 8:
+            break
+
+    print(f"  [KEYWORDS] Generated {len(result)} keywords: {result}")
+    return result
 
 
 async def draft_outreach(influencer: dict, brief: dict) -> str:
